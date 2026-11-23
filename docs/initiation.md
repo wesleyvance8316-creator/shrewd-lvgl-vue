@@ -107,3 +107,9 @@ pub/sub、多进程)归 sb_dbus;状态依赖("谁读过谁自动跟",computed
   随本项目真实需求演进,本地同步让改-编-验的回路不卡手);要第三方定格就
   `--basic-from git` 按 commit 钉死。代价是预 1.0 的 API 一改,deps/ 要
   重新同步重编——这是第三方模型本来的摩擦。
+- **父目录另有聚合体**:上级目录有一份 CMakeLists.txt,把 shrewd-basic /
+  lvgl-vue / corm / demo 按在场情况 `add_subdirectory` 到一起,只用来一起
+  编译和给 IDE 一个项目模型(父目录不建 git、不导出安装、不定版本)。
+  为此子项目要能作子项目构建:依赖查找带 `if(NOT TARGET …)` 守卫,工作区
+  里就地链接兄弟仓,独立构建照旧 `find_package`——两条路径不共存。实际
+  开发仍在子项目里单独编译调试测试。

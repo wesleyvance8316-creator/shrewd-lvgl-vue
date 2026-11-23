@@ -11,8 +11,19 @@ project(shrewd-lv-view
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-option(SHREWD_LV_VIEW_BUILD_TESTS "Build the tests" ${PROJECT_IS_TOP_LEVEL})
-option(SHREWD_LV_VIEW_INSTALL "Generate install rules" ${PROJECT_IS_TOP_LEVEL})
+# Built as its own project, or as a member of the shrewd workspace (the
+# aggregate CMakeLists.txt one directory up). Everything that belongs to
+# a standalone build - tests, install rules, package export - stays out
+# of a parent project's way. Computed by hand rather than with
+# PROJECT_IS_TOP_LEVEL, which is CMake 3.21 and this project claims 3.20.
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(SHREWD_LV_VIEW_IS_TOP_LEVEL ON)
+else()
+    set(SHREWD_LV_VIEW_IS_TOP_LEVEL OFF)
+endif()
+
+option(SHREWD_LV_VIEW_BUILD_TESTS "Build the tests" ${SHREWD_LV_VIEW_IS_TOP_LEVEL})
+option(SHREWD_LV_VIEW_INSTALL "Generate install rules" ${SHREWD_LV_VIEW_IS_TOP_LEVEL})
 option(SHREWD_LV_VIEW_BUILD_STATIC "Build the static library" ON)
 
 # Warnings applied to our own targets only (link against this INTERFACE target).
@@ -59,8 +70,19 @@ endfunction()
 # lvgl is external and released, so its version is part of the contract.
 # shrewd-basic is pinned by deps/versions.lock instead: it is pre-1.0 and
 # its minor number is not a compatibility claim worth enforcing here.
-shrewd_lv_view_require_package(lvgl 9.6 CONFIG)
-shrewd_lv_view_require_package(shrewd-basic CONFIG)
+#
+# Each lookup is skipped when its target already exists. Inside the shrewd
+# workspace shrewd-basic is a sibling subproject, so its in-tree target is
+# what gets linked - and "go to definition" then lands in its real source
+# rather than in the installed copy under build/prefix. Standalone, the
+# find_package path is unchanged. The two cannot both be present: a
+# subproject's ALIAS and the imported target share a name.
+if(NOT TARGET lvgl::lvgl)
+    shrewd_lv_view_require_package(lvgl 9.6 CONFIG)
+endif()
+if(NOT TARGET shrewd-basic::shrewd-basic)
+    shrewd_lv_view_require_package(shrewd-basic CONFIG)
+endif()
 
 # ---------------------------------------------------------------------------
 # The library
