@@ -1,0 +1,5 @@
+# Dependency source trees are fetched by tools/fetch-deps.sh and are not
+# committed; the pin that describes them is (versions.lock). Keep the
+# directory itself tracked.
+/lvgl/
+/shrewd-basic/

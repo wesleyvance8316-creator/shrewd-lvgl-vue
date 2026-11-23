@@ -11,7 +11,17 @@ on embedded Linux LVGL; the data plane is
 house style; consumers include only `shrewd-lv-view/view.h`.
 
 - Design & charter: [docs/initiation.md](docs/initiation.md)
-- Build: `cmake -S . -B build && cmake --build build && ctest --test-dir build`
+- Build:
+
+  ```
+  tools/fetch-deps.sh && tools/build-deps.sh
+  cmake -S . -B build && cmake --build build && ctest --test-dir build
+  ```
+
+- Dependencies: lvgl 9.6.0 and shrewd-basic, pinned in
+  [deps/versions.lock](deps/versions.lock). Each is built as its own
+  project and imported through `find_package` - no `add_subdirectory`,
+  no `FetchContent` into the build tree (docs/initiation.md §9).
 - Style: clang-format / clang-tidy gates, same conventions as shrewd-basic
   (`tools/check-style.sh`, pre-commit hooks: `git config core.hooksPath .githooks`).
 

@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+# shrewd-lv-view hands its own dependencies on to the consumer, because
+# its public header exposes both: lv_obj_t* binding targets (lvgl) and
+# shrewd_basic_reflect_* types (shrewd-basic). Everything is expected to
+# live in one install prefix, so a single CMAKE_PREFIX_PATH entry resolves
+# the whole set.
+include(CMakeFindDependencyMacro)
+find_dependency(lvgl 9.6)
+find_dependency(shrewd-basic)
+
+include("${CMAKE_CURRENT_LIST_DIR}/shrewd-lv-view-targets.cmake")
+
+check_required_components(shrewd-lv-view)

@@ -1,0 +1,25 @@
+# ---------------------------------------------------------------------------
+# deps/versions.lock - dependency pins for tools/fetch-deps.sh.
+# ---------------------------------------------------------------------------
+# Plain KEY=VALUE. Read with grep/cut, never sourced, so this file is data
+# and cannot execute anything. Commit this file; the source trees it
+# describes live beside it and are NOT committed (see deps/.gitignore).
+#
+# The pin is the contract. To move a dependency: edit the value here, run
+# tools/fetch-deps.sh --force, then tools/build-deps.sh.
+
+# --- lvgl: always cloned from git at the pinned tag -----------------------
+# v9.6.0 is a lightweight tag, so the tag resolves straight to this commit.
+LVGL_VERSION=9.6.0
+LVGL_GIT_URL=https://github.com/lvgl/lvgl.git
+LVGL_GIT_TAG=v9.6.0
+LVGL_GIT_COMMIT=80ca777e37a2b176770726a02e07a6fb79ef0b39
+
+# --- shrewd-basic: git clone, or copied from a local checkout -------------
+# Default is a local copy of the sibling checkout (tools/fetch-deps.sh
+# --basic-from local) because shrewd-basic is pre-1.0 and its API is still
+# driven by this project's real needs. Use --basic-from git for a pinned
+# third-party snapshot at SHREWD_BASIC_GIT_COMMIT below.
+SHREWD_BASIC_VERSION=0.2.0
+SHREWD_BASIC_GIT_URL=https://github.com/wesleyvance8316-creator/shrewd-basic.git
+SHREWD_BASIC_GIT_COMMIT=9a2979369359a2ad46345023bebdab65ddd9d973

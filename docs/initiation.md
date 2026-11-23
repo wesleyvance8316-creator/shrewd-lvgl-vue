@@ -80,3 +80,30 @@ eventfd+lv_timer 批量)→ `shrewd_lv_view_set` → 反应图自动推 UI。桥
 API 自由演进),未定型 API 不惊动冻结面。语义分野:事件("谁变了",
 pub/sub、多进程)归 sb_dbus;状态依赖("谁读过谁自动跟",computed
 派生、零接线联动)归反应核心。
+
+## 9. 构建与第三方依赖
+
+外部库**各建各的,只靠安装面接头**,不塞进彼此的构建树:
+
+    deps/lvgl          ── 独立 build + install ──▶ PREFIX/lib/cmake/lvgl/
+    deps/shrewd-basic  ── 独立 build + install ──▶ PREFIX/lib/cmake/shrewd-basic/
+                          └──────── find_package(CONFIG) ────────┘
+                                           ▼
+                                  shrewd-lvgl-vue
+
+源码由 `tools/fetch-deps.sh` 按 `deps/versions.lock` 的钉子放进 `deps/`
+(不入库);`tools/build-deps.sh` 逐个 configure/build/install 到
+`build/prefix`;本仓只 `find_package(<name> CONFIG)` 消费——**没有
+`add_subdirectory`,也没有 FetchContent 进构建树**。本仓自己同样导出
+`shrewd-lv-view::shrewd-lv-view`,进上层项目走的是同一条标准路径。
+
+- **lvgl** 用 `-DLV_CONF_SKIP=ON`:不带 `lv_conf.h` 也能自洽编译,而且
+  lvgl 会把该定义写进安装接口(`lvgl_install_definitions`),下游看到的
+  是同一份配置。`LV_FETCH_DEPENDENCIES=OFF` 是保险丝——真要联网拉依赖时
+  直接报错,而不是悄悄拉一个 versions.lock 里没有的东西。
+- 头文件写 `#include "lvgl/lvgl.h"`,不是 `"lvgl.h"`:后者是 lvgl 源码树
+  根上的垫片,装出来的包里没有它;前者在安装包和源码树里都成立。
+- **shrewd-basic** 默认从兄弟仓 `../shrewd-basic` 同步(预 1.0,API 还在
+  随本项目真实需求演进,本地同步让改-编-验的回路不卡手);要第三方定格就
+  `--basic-from git` 按 commit 钉死。代价是预 1.0 的 API 一改,deps/ 要
+  重新同步重编——这是第三方模型本来的摩擦。

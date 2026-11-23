@@ -21,10 +21,11 @@
 const char *shrewd_lv_view_version(void);
 
 /*
- * Reactive core (shrewd_lv_view_ref_t / _get / _set / _effect /
- * _computed / _watch) lands here after the placement decision
- * (docs/initiation.md "open question"); the binding layer and the
- * bus-to-UI bridge follow.
+ * The binding layer lands here (docs/initiation.md milestone 2): text /
+ * range / v-model bindings and the component lifecycle. The reactive
+ * core is not duplicated in this facade - it lives in shrewd-basic
+ * (shrewd_basic_reflect_ref_t / _effect / _computed / _watch) and its
+ * public header travels with this package.
  */
 
 #endif /* SHREWD_LV_VIEW_VIEW_H */

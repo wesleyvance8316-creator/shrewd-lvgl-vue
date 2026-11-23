@@ -37,7 +37,7 @@ tidy_args=""
 if [ -f "$build/compile_commands.json" ]; then
     tidy_args="-p $build"
 fi
-for f in $(find library tests programs tools -name '*.c' | sort); do
+for f in $(find library tests tools -name '*.c' | sort); do
     case "$f" in
         tools/reflect_gen_golden*) continue ;;  # machine output, not hand code
     esac
