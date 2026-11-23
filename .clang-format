@@ -1,0 +1,58 @@
+---
+# shrewd-basic C style. Verified against the codebase's de-facto style;
+# clang-format is the single source of layout truth (macros included).
+Language: Cpp
+BasedOnStyle: LLVM
+
+# --- indentation and width ---
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+ContinuationIndentWidth: 4
+
+# --- braces: everything attaches (opening brace on the same line) ---
+BreakBeforeBraces: Attach
+InsertBraces: true
+RemoveSemicolon: true
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: None
+AllowShortCaseLabelsOnASingleLine: false
+IndentCaseLabels: false
+
+# --- spacing ---
+SpaceBeforeParens: ControlStatements
+SpacesInParens: Never
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeSquareBrackets: false
+SpacesBeforeTrailingComments: 1
+SpaceBeforeCpp11BracedList: false
+Cpp11BracedListStyle: true
+
+# --- alignment ---
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignTrailingComments: true
+AlignEscapedNewlines: Right
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+# --- wrapping and packing ---
+BinPackParameters: false
+BinPackArguments: false
+AlwaysBreakAfterReturnType: None
+PenaltyReturnTypeOnItsOwnLine: 10000
+BreakBeforeBinaryOperators: All
+BreakBeforeTernaryOperators: true
+BreakStringLiterals: true
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# --- comments and includes ---
+ReflowComments: true
+SortIncludes: Never
+IndentPPDirectives: None

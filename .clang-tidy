@@ -1,0 +1,10 @@
+---
+# Coding rules beyond layout (layout is .clang-format's job).
+# Run: clang-tidy -p <build> <file>     (check)
+#      clang-tidy -p <build> -fix <file> (repair)
+Checks: >-
+  -*,
+  cppcoreguidelines-init-variables,
+  readability-braces-around-statements
+WarningsAsErrors: ''
+HeaderFilterRegex: '(library|tests|programs|tools|include)/'

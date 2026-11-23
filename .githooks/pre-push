@@ -1,0 +1,12 @@
+#!/bin/sh
+# Pre-push: the full style gate (clang-format + clang-tidy + condition
+# parens) over the whole tree. Slower than pre-commit - that one keeps
+# the fast mistakes out, this one keeps the push honest. Skip with
+#   git push --no-verify
+set -u
+
+if ! sh tools/check-style.sh; then
+    echo "pre-push: full style gate failed - push rejected"
+    exit 1
+fi
+exit 0

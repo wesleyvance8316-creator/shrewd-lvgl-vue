@@ -1,0 +1,41 @@
+#!/bin/sh
+# Pre-commit style gate (fast tier):
+#   1. clang-format --dry-run over the staged .c/.h sources
+#   2. tools/check-condition-parens.py for the condition-paren rules
+# The full gate (clang-tidy included) is tools/check-style.sh - it runs
+# from .githooks/pre-push or by hand.
+set -u
+
+# Skip while merging or rebasing.
+gitdir=$(git rev-parse --git-dir 2>/dev/null) || exit 0
+if [ -n "$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null)" ] \
+        || [ -d "$gitdir/rebase-merge" ] || [ -d "$gitdir/rebase-apply" ]; then
+    exit 0
+fi
+
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACM \
+             | grep -E '\.(c|h)$' | grep -v '\.h\.in$' \
+             | grep -v '^tools/reflect_gen_golden' || true)  # machine output
+
+for f in $staged; do
+    if ! clang-format --dry-run --Werror "$f" > /dev/null 2>&1; then
+        echo "pre-commit: format drift: $f"
+        echo "  fix with: clang-format -i $f"
+        fail=1
+    fi
+done
+
+if [ -n "$staged" ]; then
+    if ! out=$(python3 tools/check-condition-parens.py); then
+        echo "$out" | head -10
+        echo "  fix: wrap each sub-condition in parentheses ((a) && (!b))"
+        fail=1
+    fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo "pre-commit: style gate failed - commit rejected"
+    exit 1
+fi
+exit 0
