@@ -1,0 +1,309 @@
+# shrewd-lv-view 架构与方案设计
+
+> 状态:**设计稿 v1(2026-11-24),仅设计、未实现**。
+> 上位文档:[initiation.md](initiation.md)(立项、目标与非目标)。
+> 本文只谈"怎么做",不重复"为什么要做"。
+> §13 是**待决事项**,写在这里就是准备和你逐条过。
+
+## 0. 读法
+
+§1 是**硬约束**——不是我的偏好,是从 `react.c` / LVGL 9.6 头文件里实测出来的行为,
+以及家族约定。方案里的每一条形状都由它们推出来,所以先看 §1,再看 §2 往后。
+如果你不同意 §1 的某条推论,多半是那条约束本身要重新处理。
+
+## 1. 硬约束
+
+### 1.1 反应核心的真实语义(实测自 shrewd-basic `library/reflect/react.c`)
+
+| # | 行为 | 对本层的后果 |
+|---|---|---|
+| C1 | `ref_set` 写完槽位后**无条件**通知订阅者,不做等值判断 | 只要有人写 ref,绑定就会重跑。**回路是必然的**,必须有显式抑制(§4) |
+| C2 | effect 重入:运行中再次触发只置 `REACT_F_DIRTY`,当前轮结束后**重跑**,**不递归** | 栈不会爆;但一个 effect 可能被多跑一次,绑定写 widget 要幂等 |
+| C3 | 每次运行先**清空依赖边再重收** | 条件依赖(分支里才读的 ref)是正确的,可以放心用 |
+| C4 | `ref_get` 在 effect 之外是纯读,不登记 | 状态方读自己的值不会误订阅 |
+| C5 | 依赖边由 `shrewd_basic_platform_*` 分配;**分配失败时静默漏跟踪** | 内存紧张下会出现"改了不刷新"。要记进约束与排查手册 |
+| C6 | `effect_dispose` 只断边,**不释放 effect 本体**(调用方内嵌) | 绑定记录必须由本层自己分配、自己释放(§3) |
+| C7 | effect 对象是**调用方内嵌**的 | 绑定记录里内嵌 effect,记录本身走 `shrewd_basic_platform_alloc` |
+
+### 1.2 LVGL 9.6 的真实约束(实测自 `deps/lvgl/include/lvgl`)
+
+| # | 行为 | 对本层的后果 |
+|---|---|---|
+| L1 | `lv_obj_add_event_cb(obj, cb, filter, user_data)` → `lv_event_dsc_t*` | 绑定的清理钩子有处可挂(`LV_EVENT_DELETE`) |
+| L2 | `LV_USE_EXT_DATA` **默认 0** | `lv_event_desc_set_external_data` 那套带析构的私有数据**用不了**(我们用 `LV_CONF_SKIP`,取的就是默认)。清理必须自己写 |
+| L3 | `lv_label_get_text` / `lv_textarea_get_text` 返回 **LVGL 自持指针** | 写回 ref **必须拷贝**,不能把指针塞进槽位 |
+| L4 | `lv_label_set_text` 自持拷贝(除非 `_static`) | 写方向安全:ref 里的字符串可以被状态方随后改写 |
+| L5 | `lv_slider_set_value(obj, v, anim)` 带 anim 参数 | 绑定一律传 `LV_ANIM_OFF`——反应式刷新不该带动画 |
+| L6 | 无头可跑:`lv_display_create` + `set_buffers` + `set_flush_cb` + `lv_tick_set_cb` | 单测不需要显示器,§11 有夹具 |
+| L7 | `lv_async_call(cb, user_data)` 由 `lv_timer_handler()` 驱动 | 跨线程桥(§9)的前提是调用方主循环在跑 `lv_timer_handler` |
+
+### 1.3 家族约定
+
+- 命名:公共标识符一律 `shrewd_lv_view_*`,宏 `SHREWD_LV_VIEW_*`。
+- 内存:一律 `shrewd_basic_platform_alloc/calloc/free`,不碰 `malloc`。
+- 错误:非布尔接口返回 `int`,`SHREWD_BASIC_ERR_OK`(=0)成功、负值失败,数据走出参。
+- 文本:shrewd-basic 的 reflect **已经区分两种字符串语义**——`KIND_STRING`(`char *`
+  指针,所有权在状态方)与 `FIELD_TEXT`(定长内联缓冲,按 C 串渲染/比较)。本层**对齐
+  这套语义,不另造**。
+
+## 2. 核心抽象:绑定就是 effect
+
+Vue 的 `watchEffect(() => el.textContent = state.value)` 换到 C 就是:
+
+```c
+static void bind_label_text_fn(void *ctx) {
+    shrewd_lv_view_bind_t *b = ctx;
+    const char *s = *(const char * const *)shrewd_basic_reflect_ref_get(b->ref);
+    b->applying = 1;
+    lv_label_set_text((lv_obj_t *)b->obj, s);
+    b->applying = 0;
+}
+
+int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref) {
+    /* 分配绑定记录 → effect_init(fn, record) → 挂 LV_EVENT_DELETE */
+}
+```
+
+`effect_init` 会**立刻跑一次**(收依赖),之后 `ref_set` 自动重跑。整个"状态 → UI 自动
+传播"就这一件事,其余全是它的簿记。
+
+由 C2,`bind_label_text_fn` 必须**幂等**:重跑一次只是把同样的字符串再写一遍,不产生副作用。
+
+## 3. 生命周期:widget 即作用域
+
+**铁律:绑定的生命周期 = widget 的生命周期。**
+
+绑定记录由本层 `shrewd_basic_platform_alloc` 分配(C7),内嵌一个 effect。每个绑定在
+它的 widget 上挂一个 `LV_EVENT_DELETE` 回调,`user_data` 指向记录。widget 被删时:
+`effect_dispose`(断订阅)→ 释放记录。
+
+    组件 root 被 lv_obj_delete
+        → LVGL 自底向上删整棵子树,逐个发 LV_EVENT_DELETE
+            → 每个绑定各自解绑、自清
+    组件的 dispose 因此只需一行:lv_obj_delete(root)
+
+**契约(必须写进头文件文档)**:状态 struct 由调用方内嵌,它必须活得比 widget 久。
+`dispose()` 先删 widget(级联解绑),之后状态 struct 才可复用或出作用域。反过来
+(先释放状态、后删 widget)会留悬挂引用。
+
+三个层次的所有权分开看:
+
+| 对象 | 所有者 | 释放时机 |
+|---|---|---|
+| 状态 struct(含 ref 本体与槽位) | 调用方 | widget 树删除**之后** |
+| 绑定记录(含 effect) | 绑定层 | widget 删除时(级联) |
+| 依赖边 | 反应核心 | 重跑时清,或 `effect_dispose` |
+| LVGL widget | LVGL | `lv_obj_delete` |
+
+## 4. 双向绑定与回路抑制
+
+`v-model` = 单向绑定(ref → widget)+ 事件写回(widget → ref)。
+
+由 C1,`ref_set` 无条件通知,**回路是必然的**:
+
+    ref_set → effect 重跑 → lv_slider_set_value → LV_EVENT_VALUE_CHANGED
+          → 写回回调 → ref_set → …
+
+**抑制机制:`applying` 标志,集中在绑定记录里**。effect 往 widget 写时置位,写回回调
+第一行检查,置位期间直接返回。这样抑制只有一处实现,不靠各绑定自觉。
+
+要不要顺带做等值判断?**不作为正确性手段**——`applying` 已经保证不回路。但 widget
+侧可以做一次"值没变就跳过 `lv_*_set_*`",减少无效 invalidate,属于可选优化,不该
+被当成安全性的一部分。
+
+写回的方向还有一个细节:widget → ref 时若 ref 的槽位就是 widget 刚才读到的那份数据,
+`ref_set` 仍然通知所有订阅者(含自己)。`applying` 已经挡住自己这一条;其他订阅者
+会照常跑,这是对的(它们确实该知道值变了)。
+
+## 5. 值类型与槽位语义
+
+ref 是**定宽字节槽**(`void *slot; size_t size`)。绑定层提供两类适配:
+
+**数值**——槽位即 `int32_t` 等,直接读写。
+
+**文本**——对齐 shrewd-basic 的两种语义:
+
+| 槽位 | 类比 | 写向 widget | widget 写回 | 适用 |
+|---|---|---|---|---|
+| `char[N]` 定长缓冲 | `FIELD_TEXT` | `lv_*_set_text(obj, slot)` | `strncpy` 拷进 slot,整块 `ref_set` | **双向(v-model)** |
+| `const char *` 指针 | `KIND_STRING` | `lv_*_set_text(obj, ptr)` | 不支持(需状态方另有缓冲) | 单向展示 |
+
+关键点(L3):widget 读回来的是 **LVGL 自持指针**,写回 ref 必须**拷贝**;而写向 widget
+(L4)是 LVGL 自持拷贝,状态方随后改自己的缓冲是安全的,只要记得 `ref_set` 通知一下。
+
+`char[N]` 槽位的代价是长度上限与整块写。这是 C 里换所有权干净的价钱,先接受它;
+指针形态留给"只展示、状态方自持内存"的场景。
+
+## 6. API 形状:两层
+
+**底层是机制,上层是手感。** 机制只有一份,便捷函数是薄壳。
+
+```c
+/* 底层:一个通用绑定 + 属性适配器 */
+typedef struct shrewd_lv_view_target {
+    void (*write)(void *obj, const void *value, size_t size); /* ref → widget */
+    int  (*read)(void *obj, void *out, size_t size);          /* widget → ref,无则 NULL */
+    uint32_t changed_event;   /* 写回触发的事件码,read 为 NULL 时忽略 */
+} shrewd_lv_view_target_t;
+
+int shrewd_lv_view_bind(void *obj,
+                        const shrewd_lv_view_target_t *target,
+                        shrewd_basic_reflect_ref_t *ref);
+
+/* 上层:每个 widget/属性一个便捷函数 */
+int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+```
+
+- `write` 为 NULL 的 target 不合法;`read` 为 NULL 即**单向**;`read` 非 NULL 即**双向**,
+  自动挂 `changed_event` 做写回。`applying` 抑制在底层,不进适配器。
+- 新增一个 widget 属性 = 加一张静态 target 表 + 一个 3 行的便捷函数,不改机制。
+
+为什么不只做便捷函数?那样 `applying`、DELETE 清理、写回接线会散进每个函数里,改一处
+要改 N 处。为什么不只做底层?因为立项文档写了"API 即产品",调用点的手感是交付物。
+
+## 7. 组件模型
+
+对齐立项文档:**状态 struct + 创建函数 + 销毁函数**,状态 struct 调用方内嵌。
+
+```c
+typedef struct {
+    lv_obj_t *root;
+    /* 状态:ref 本体 + 各自的槽位 */
+    shrewd_basic_reflect_ref_t title;   char   title_buf[64];
+    shrewd_basic_reflect_ref_t level;   int32_t level_val;
+} shrewd_demo_card_t;
+
+int  shrewd_demo_card_create(shrewd_demo_card_t *c, lv_obj_t *parent);
+void shrewd_demo_card_dispose(shrewd_demo_card_t *c);   /* 就一行 lv_obj_delete(c->root) */
+```
+
+- 创建函数:init 各 ref(槽位指向同 struct 里的字段)→ 建 widget 树 → 逐个绑定。
+- 销毁函数:按 §3 只需删 root,绑定级联自清。**不要**在里面手动 dispose 绑定——
+  那是机制的活。
+- 组件不碰 dbus(桥层才碰),所以组件可独立单测。
+
+## 8. 列表与条件渲染:对账原语
+
+立项文档定的口径:**容器子项按 key 最小对账,增删 lv 对象,不做 diff 算法**。
+
+条件渲染是它的退化形态(key 集合是 0 或 1),所以共用一个原语:
+
+```c
+typedef struct {
+    size_t   item_size;                  /* 每项数据的宽度 */
+    uint32_t (*count)(const void *ctx);
+    const void *(*at)(const void *ctx, uint32_t i);   /* 指向第 i 项数据 */
+    uint32_t (*key)(const void *ctx, uint32_t i);     /* 稳定标识 */
+    int  (*build)(void *item_ctx, lv_obj_t *container, void *item);
+    void (*teardown)(void *item_ctx);
+} shrewd_lv_view_list_desc_t;
+
+int shrewd_lv_view_bind_list(lv_obj_t *container,
+                             shrewd_basic_reflect_ref_t *source,
+                             const shrewd_lv_view_list_desc_t *desc,
+                             void *ctx);
+```
+
+对账规则(最小的那一种):
+
+1. 逐个 key 查现有子项;**命中** → 复用,只更新数据与绑定;
+2. **未命中** → `build` 建新子项;
+3. 扫一遍现有子项,数据里没有的 key → `teardown` + `lv_obj_delete`(绑定按 §3 级联自清)。
+
+**顺序变化**(key 集合相同但次序不同)怎么处理,是 §13 的 D5:是把已有对象 `lv_obj`
+移到目标 index(便宜),还是当增删处理(简单但会重建、丢状态)。倾向前者,但要看
+LVGL 有没有对应的移动 API。
+
+## 9. 跨线程桥
+
+立项文档的口径:
+
+    dbus recv(分发线程)→ 快照拷贝 → lv_async_call(或 eventfd+lv_timer 批量)
+      → shrewd_lv_view_set → 反应图自动推 UI
+
+由 C1,`ref_set` 会**在调用线程同步跑 effect**,effect 里是 `lv_*` 调用。所以:
+
+**铁律:所有 `ref_set` 必须发生在 LVGL 线程。** 桥的全部职责就是把数据从别的线程送到
+这个线程,没有任何魔法。立项文档的非目标里写了"不隐藏线程",这条就是它的落地形态——
+调用方看得见自己在做跨线程投递。
+
+桥的形状:
+
+    recv 线程: 快照入队(带序号/版本)
+    LVGL 线程: lv_timer_handler → 驱动 lv_async_call 回调
+              → 一次性出队全部快照 → 逐个 ref_set
+              → effect 同步推 UI,LVGL 自行合并重绘
+
+批量是关键:50 个字段变化不该唤醒 UI 线程 50 次。一次 dispatch 吃掉整队,由 C2/effect
+去重,由 LVGL 合并重绘。
+
+桥放在**本仓**(立项文档:"桥是唯一引用 LVGL API 的层,必须留在本仓库"),但**不进
+里程碑 2**——先有能单测的绑定层,再谈总线合流。
+
+## 10. 约定
+
+- **命名**:`shrewd_lv_view_*` / `SHREWD_LV_VIEW_*`。讨论中的临时名不落代码。
+- **内存**:`shrewd_basic_platform_*`,不碰 `malloc`。所有记录都有对应的 dispose。
+- **错误**:返回 `int`,OK=0,负值失败,数据走出参。**归属是 D4**,见 §13。
+- **头文件**:消费者只 include `shrewd-lv-view/view.h`;绑定层是自包含私有实现。
+  LVGL 与 shrewd-basic 的类型会出现在 API 形参里(§initiation.md 门面隔离:隔离的是
+  实现,不是类型)。
+
+## 11. 测试策略
+
+立项文档要求"绑定层可独立单测"。三层:
+
+| 层 | 手段 | 覆盖 |
+|---|---|---|
+| **机制单测** | 纯 C,不碰 LVGL | `applying` 抑制、对账算法、绑定记录的分配/释放 |
+| **无头集成** | `tests/lvgl_fixture.{c,h}`:lv_init + display + 小 buffer + no-op flush + 假 tick(L6) | 绑定真跑,断言走 `lv_label_get_text` / `lv_slider_get_value` 读回 |
+| **事件写回** | `lv_obj_send_event` 或假 indev 投事件 | v-model 回写与回路抑制 |
+
+夹具要点:`lv_display_set_buffers` 用一块小缓冲即可(不需要全屏),`lv_display_set_flush_cb`
+给个空实现,`lv_tick_set_cb` 给个单调递增的假时钟。**不用**模拟渲染结果,断言一律
+查状态(LVGL 属性读回 + ref 槽位)。
+
+## 12. 里程碑切分
+
+**M2(下一段)**:机制 + text/range + v-model + 组件生命周期
+1. `shrewd_lv_view_target_t` / `shrewd_lv_view_bind()` 底层机制,含 `applying` 与 DELETE 清理
+2. label text / slider value / textarea text 三个便捷绑定
+3. 无头夹具 + 机制单测
+4. 组件模型(创建/销毁)与一个 demo 组件
+
+**M3**:列表/条件渲染 + dbus 桥
+5. `bind_list` 对账原语与条件渲染退化形态
+6. 跨线程桥与 sb_dbus 合流
+7. 真实页面原型倒推 API 手感(立项文档里程碑 3)
+
+## 13. 待决事项
+
+**D1 生命周期铁律:widget 删除即解绑**
+绑定记录随 widget 删除自清,组件 dispose 只删 root。代价是"状态 struct 必须活得比
+widget 久"这条契约要写进每个组件的头文件。**能否接受?** 备选是绑定显式持有、组件
+销毁时逐个解绑(所有权更直白,但每个组件多一堆样板)。
+
+**D2 API 形状:两层 vs 纯便捷函数**
+我倾向两层(§6):机制单点、手感仍在。若你觉得底层 target 表过于抽象,可以退成
+"每个绑定一份静态 target 表但不对外暴露 `shrewd_lv_view_bind()`"。
+
+**D3 文本槽位:`char[N]` 定长 vs `const char *` 指针**
+§5 的表格。我倾向**两者都支持**、以定长缓冲为 v-model 的默认形态。若你想更激进,
+也可以只做定长缓冲,把指针形态推到 M3 再说。
+
+**D4 错误码归属**
+(a) 复用 `shrewd_basic_error_t`——但它的域是 shrewd-basic 分配的,往别人枚举里加码不对;
+(b) 自建 `shrewd_lv_view_error_t`,同构(`SHREWD_LV_VIEW_ERR_*`,OK=0,负值),
+    并提供 `shrewd_lv_view_error_name()`。
+    还要定:本层失败若是 shrewd-basic 传上来的(如 `MEM_NOMEM`),是原样返回、
+    还是映射到自己的码?我倾向**原样返回**——错误码是家法,不跨层重编码。
+
+**D5 列表顺序变化:移动已有对象 vs 当增删处理**
+倾向移动(`lv_obj_*` 有没有对应 API 需确认),否则子项里编辑到一半的状态会丢。
+
+**D6 是否向消费者暴露 computed / watch**
+反应核心有这两个派生形态。绑定层只用 effect 就够了。要不要把 computed/watch 原样
+透出给组件作者?透出则 API 面更大,不透则组件里派生状态要自己写 effect。倾向**先不透**,
+等真实页面原型倒推时再决定(立项文档的里程碑 3 正是干这个的)。
