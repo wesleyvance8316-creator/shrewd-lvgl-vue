@@ -1,11 +1,11 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v1(2026-11-24),仅设计、未实现**。
+> 状态:**设计稿 v2(2026-11-25),仅设计、未实现;D1–D5 已决**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
-> 数据/事件/页面的关系、线程模型)。**先读那份**,本文假定它已被接受。
+> 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
 > 本文只谈"代码怎么定形",不重复"为什么是这个模型"。
-> §13 是**待决事项**,写在这里就是准备和你逐条过。
+> §13 是**已决汇总与下一步**;D1–D5 已落定,决策写在各自小节。
 
 ## 0. 读法
 
@@ -73,7 +73,14 @@ int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *re
 
 ## 3. 生命周期:widget 即作用域
 
-**铁律:绑定的生命周期 = widget 的生命周期。**
+**铁律:绑定的生命周期 = widget 的生命周期。**(D1 已决)
+
+> **调研依据**:Vue 3 的 `effectScope` —— "an effect scope object which can **capture
+> the reactive effects created within it** so that these effects can be **disposed
+> together**",`scope.stop()` 一次性释放。React 的 `useEffect` cleanup、Android 的
+> `LiveData.observe` 随生命周期自动解除,同构。**这是作用域模型,不是逐个解绑**:
+> 使用者不记不解绑,**漏解绑在结构上不可能**。只有 Flutter 偏手动(`dispose()` 要
+> 自己调),未采纳——与"使用者不操心"的目标相反。
 
 绑定记录由本层 `shrewd_basic_platform_alloc` 分配(C7),内嵌一个 effect。每个绑定在
 它的 widget 上挂一个 `LV_EVENT_DELETE` 回调,`user_data` 指向记录。widget 被删时:
@@ -133,10 +140,21 @@ ref 是**定宽字节槽**(`void *slot; size_t size`)。绑定层提供两类适
 关键点(L3):widget 读回来的是 **LVGL 自持指针**,写回 ref 必须**拷贝**;而写向 widget
 (L4)是 LVGL 自持拷贝,状态方随后改自己的缓冲是安全的,只要记得 `ref_set` 通知一下。
 
+**这与 LVGL 自己的约定一致**(D3 已决,已从 vendored 源码核实):
+
+| LVGL API | 语义 |
+|---|---|
+| `lv_label_set_text` | *"Memory will be allocated to store the text by the label"* —— **拷贝,安全** |
+| `lv_label_set_text_static` | *"It will not be saved by the label so the 'text' variable has to be 'alive' while the label exists"* —— **借用,契约是字符串活过 widget** |
+
+所以本层是**「默认安全 + 变体借用」**:`char[N]` 是安全默认(可 v-model),`const char *`
+是借用变体,**契约与 LVGL 的 `_static` 完全相同**——不给使用者新的心智负担。便捷函数的
+命名沿用 `_static` 后缀的习惯。
+
 `char[N]` 槽位的代价是长度上限与整块写。这是 C 里换所有权干净的价钱,先接受它;
 指针形态留给"只展示、状态方自持内存"的场景。
 
-## 6. API 形状:两层
+## 6. API 形状:两层(D2 已决)
 
 **底层是机制,上层是手感。** 机制只有一份,便捷函数是薄壳。
 
@@ -248,7 +266,15 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 
 - **命名**:`shrewd_lv_view_*` / `SHREWD_LV_VIEW_*`。讨论中的临时名不落代码。
 - **内存**:`shrewd_basic_platform_*`,不碰 `malloc`。所有记录都有对应的 dispose。
-- **错误**:返回 `int`,OK=0,负值失败,数据走出参。**归属是 D4**,见 §13。
+- **错误**(D4 已决):返回 `int`,OK=0,负值失败,数据走出参。**自建
+  `shrewd_lv_view_error_t`,同构家族约定,占 -600..-699;shrewd-basic 的失败原样返回,
+  不跨层重编码。** 往别人的枚举里加码是错的,所以自建;但 `MEM_NOMEM` 就是
+  `MEM_NOMEM`,调用方能分辨"内存不足"与"本层参数错"。`shrewd_lv_view_error_name()`
+  对不认识的码回落到 `shrewd_basic_error_name()`,不丢信息。
+  **需与 shrewd-basic 约定 -600..-699 保留给 lv_view**,免得日后撞号。
+- **computed / watch**(D5 已决):**不主动重复暴露**。`view.h` 的 API 形参是
+  `shrewd_basic_reflect_ref_t *`,它**必然引入 `react.h`** —— computed / watch 就在
+  那个头里,随之可用。`view.h` 只管绑定与页面管理:API 面不膨胀,能力也不缺。
 - **头文件**:消费者只 include `shrewd-lv-view/view.h`;绑定层是自包含私有实现。
   LVGL 与 shrewd-basic 的类型会出现在 API 形参里(§initiation.md 门面隔离:隔离的是
   实现,不是类型)。
@@ -280,29 +306,26 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 6. 跨线程桥与 sb_dbus 合流
 7. 真实页面原型倒推 API 手感(立项文档里程碑 3)
 
-## 13. 待决事项
+## 13. 已决汇总与下一步
 
-**D1 生命周期铁律:widget 删除即解绑**
-绑定记录随 widget 删除自清,组件 dispose 只删 root。代价是"状态 struct 必须活得比
-widget 久"这条契约要写进每个组件的头文件。**能否接受?** 备选是绑定显式持有、组件
-销毁时逐个解绑(所有权更直白,但每个组件多一堆样板)。
+D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 
-**D2 API 形状:两层 vs 纯便捷函数**
-我倾向两层(§6):机制单点、手感仍在。若你觉得底层 target 表过于抽象,可以退成
-"每个绑定一份静态 target 表但不对外暴露 `shrewd_lv_view_bind()`"。
+| | 决策 | 落在 | 依据 |
+|---|---|---|---|
+| **D1** | **作用域模型**:绑定随 widget 自清,组件 dispose 只删 root | §3 | Vue `effectScope` / React cleanup / Android LiveData 同构;只有 Flutter 偏手动,未采纳 |
+| **D2** | **两层**:机制单点 + 便捷函数 | §6 | 无参照,口味;可退成只给便捷函数 |
+| **D3** | **两种都支持**,`char[N]` 为 v-model 默认 | §5 | LVGL 自己就是「拷贝默认 + `_static` 借用」 |
+| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §10 | 家族的域分配法;不跨层重编码 |
+| **D5** | **不重复暴露**,随 `react.h` 自然可用 | §10 | `view.h` 必然引入 `react.h` |
 
-**D3 文本槽位:`char[N]` 定长 vs `const char *` 指针**
-§5 的表格。我倾向**两者都支持**、以定长缓冲为 v-model 的默认形态。若你想更激进,
-也可以只做定长缓冲,把指针形态推到 M3 再说。
+**D1 的契约**(状态 struct 必须活得比作用域久)由四阶段收口:销毁钩子先删 widget
+(级联解绑)、再释放状态,顺序写死,契约落在一处。页面管理的对应语义见
+[architecture.md](architecture.md) §6.2。
 
-**D4 错误码归属**
-(a) 复用 `shrewd_basic_error_t`——但它的域是 shrewd-basic 分配的,往别人枚举里加码不对;
-(b) 自建 `shrewd_lv_view_error_t`,同构(`SHREWD_LV_VIEW_ERR_*`,OK=0,负值),
-    并提供 `shrewd_lv_view_error_name()`。
-    还要定:本层失败若是 shrewd-basic 传上来的(如 `MEM_NOMEM`),是原样返回、
-    还是映射到自己的码?我倾向**原样返回**——错误码是家法,不跨层重编码。
+**下一步(不是待决,是未做)**:
 
-**D5 是否向消费者暴露 computed / watch**
-反应核心有这两个派生形态。绑定层只用 effect 就够了。要不要把 computed/watch 原样
-透出给组件作者?透出则 API 面更大,不透则组件里派生状态要自己写 effect。倾向**先不透**,
-等真实页面原型倒推时再决定(立项文档的里程碑 3 正是干这个的)。
+1. **页面管理的 API 形状**——architecture.md §6 定了机制骨架与默认值,C 结构体与
+   函数面还没落到本文件。
+2. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
+   `error.h` 里登记(或在组合的约定文档里记明)。
+3. **M2 的实现**:§12 的里程碑切分。
