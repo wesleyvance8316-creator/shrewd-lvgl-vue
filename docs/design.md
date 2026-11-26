@@ -1,11 +1,11 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v3(2026-11-26),仅设计、未实现;D1–D5 与组件生态已决**。
+> 状态:**设计稿 v4(2026-11-26),仅设计、未实现;D1–D5、组件生态、页面管理 API 已决**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
 > 本文只谈"代码怎么定形",不重复"为什么是这个模型"。
-> §14 是**已决汇总与下一步**;D1–D5 已落定,决策写在各自小节。
+> §15 是**已决汇总与下一步**;D1–D5 已落定,决策写在各自小节。
 
 ## 0. 读法
 
@@ -36,8 +36,8 @@
 | L3 | `lv_label_get_text` / `lv_textarea_get_text` 返回 **LVGL 自持指针** | 写回 ref **必须拷贝**,不能把指针塞进槽位 |
 | L4 | `lv_label_set_text` 自持拷贝(除非 `_static`) | 写方向安全:ref 里的字符串可以被状态方随后改写 |
 | L5 | `lv_slider_set_value(obj, v, anim)` 带 anim 参数 | 绑定一律传 `LV_ANIM_OFF`——反应式刷新不该带动画 |
-| L6 | 无头可跑:`lv_display_create` + `set_buffers` + `set_flush_cb` + `lv_tick_set_cb` | 单测不需要显示器,§12 有夹具 |
-| L7 | `lv_async_call(cb, user_data)` 由 `lv_timer_handler()` 驱动 | 跨线程桥(§10)的前提是调用方主循环在跑 `lv_timer_handler` |
+| L6 | 无头可跑:`lv_display_create` + `set_buffers` + `set_flush_cb` + `lv_tick_set_cb` | 单测不需要显示器,§13 有夹具 |
+| L7 | `lv_async_call(cb, user_data)` 由 `lv_timer_handler()` 驱动 | 跨线程桥(§11)的前提是调用方主循环在跑 `lv_timer_handler` |
 
 ### 1.3 家族约定
 
@@ -321,7 +321,7 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 用类型化结构定,各自自文档化又不失统一。
 
 > **边界**:slot 是**一次创建**。槽内容要**整体替换**(不同分支建不同的树)不是 slot
-> 的活,是**条件渲染 / 列表对账**(§9)的活。别混用。
+> 的活,是**条件渲染 / 列表对账**(§10)的活。别混用。
 
 ### 7.6 主题
 
@@ -376,12 +376,135 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 | `<slot>` / 具名槽 / scoped slot | `shrewd_lv_view_slot_fn` + 类型化多槽结构 |
 | Component v-model(`:modelValue` + `@update:`) | **传 ref 即双向**(§7.4),比它省一层 |
 
-## 8. 项目形态与脚手架
+## 8. 页面管理:API 形状
+
+机制骨架在 [architecture.md](architecture.md) §6,本节落成 C 的形状;机制依据不重复。
+
+### 8.1 页面 = 片段 + 导航标识
+
+四阶段钩子(创建 / 激活 / 失活 / 销毁)对片段与页面是**同一套**,差别只在:页面有
+**导航标识 + 参数描述**、被注册进导航栈;片段只是被别人用。
+
+**所以同一套描述符** —— 页面 = 片段 + `name` + `param_type`。**不搞两套生命周期。**
+
+### 8.2 页面描述符
+
+```c
+typedef struct shrewd_lv_view_page_desc {
+    const char *name;                                /* ★ 标识,恢复时要序列化 */
+    const shrewd_basic_reflect_type_t *param_type;    /* 参数的 reflect 描述 */
+    shrewd_lv_view_release_t release;                 /* 释放策略(architecture.md 6.5) */
+
+    /* 四阶段 */
+    int  (*create)(shrewd_lv_view_page_t *p, lv_obj_t *container, const void *params);
+    int  (*enter)(shrewd_lv_view_page_t *p);
+    void (*exit)(shrewd_lv_view_page_t *p);
+    void (*destroy)(shrewd_lv_view_page_t *p);
+} shrewd_lv_view_page_desc_t;
+```
+
+**`name` 用字符串而非指针/枚举**:恢复时要靠它把页面找回来(快照序列化后跨进程、
+跨重启,指针失效);组件库各自命名,字符串天然免撞号。
+
+### 8.3 实例:调用方持有(永久)
+
+> **这一条是 architecture.md 6.3「状态不丢」唯一能兑现的形态。**
+
+```c
+typedef struct {
+    shrewd_lv_view_page_t base;            /* 必须在首位 */
+    /* 状态 */
+    shrewd_basic_reflect_ref_t title;  char title_buf[32];
+} shrewd_my_home_t;
+
+static shrewd_my_home_t home;              /* 调用方持有,永久 */
+```
+
+**释放策略只管 widget 树,不管实例**:
+
+| | 形态 | "离即销毁"销毁什么 | 状态 |
+|---|---|---|---|
+| **(a) 调用方持有** ✅ | 页面 struct 永久 | **只 widget 树** | 在 struct 里,**真不丢** |
+| (b) 框架按 `instance_size` 分配 | 实例随页面生死 | 实例 + widget | **丢**,除非在 params |
+
+取 (b) 则 architecture.md 6.3 的论证塌了——"敢释放"的前提正是状态不丢。
+
+**内存账**:实例几十字节,widget 树才是大头。所以「离即销毁」省的是 widget,不是
+实例 —— 这正是 6.3 说的"代价很低"。
+
+### 8.4 导航栈:条目与操作
+
+**条目是描述,不持 widget**:
+
+```c
+typedef struct {
+    const shrewd_lv_view_page_desc_t *desc;
+    void    *params;      /* ★ 拷贝进条目(可序列化,支撑恢复) */
+    uint32_t seq;         /* 区分同页面多次出现(architecture.md 6.11 Q4) */
+    uint64_t entered_at;  /* 进入时间:超时返回 / 诊断 */
+} shrewd_lv_view_nav_entry_t;
+```
+
+**参数拷贝进条目** —— architecture.md 6.11 Q2 定的"参数可序列化",正因为它是**可恢复
+状态的载体**。
+
+**操作集**(architecture.md 6.6):
+
+```c
+int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *, const void *params);
+int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *);
+int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *, shrewd_lv_view_nav_pred_fn, void *ctx);
+int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *anchor,
+                                    shrewd_lv_view_nav_pred_fn, void *ctx);
+int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *, const void *params);
+int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *, unsigned branch);
+```
+
+`pop_until` / `remove_until` **按谓词不按索引**(architecture.md 6.6 的调研修正);
+谓词从栈顶往下找第一个满足的,递归场景的歧义自然消解为"取最近的那个"。
+
+**分支与模态是同一套操作作用在不同的栈上**(architecture.md 6.9):
+`nav_switch_branch()` 切分支(不产生历史),模态栈独立、释放策略可不同。
+
+### 8.5 守卫
+
+```c
+typedef enum {
+    SHREWD_LV_VIEW_GUARD_ALLOW,       /* 放行 */
+    SHREWD_LV_VIEW_GUARD_CANCEL,      /* 取消 */
+    SHREWD_LV_VIEW_GUARD_REDIRECT,    /* 改道到别的页面 */
+    SHREWD_LV_VIEW_GUARD_CONSUME,     /* 吃掉请求(不真走) */
+} shrewd_lv_view_guard_result_t;
+
+typedef shrewd_lv_view_guard_result_t (*shrewd_lv_view_guard_fn)(
+        void *ctx,
+        const shrewd_lv_view_page_desc_t *to,
+        const shrewd_lv_view_page_desc_t *from);
+
+void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *, shrewd_lv_view_guard_fn, void *ctx);
+```
+
+**全局注册一个,而非每页一个** —— 守卫要看 `to/from` 才能判断,每页一个反而要拼装。
+四种结果见 architecture.md 6.7;`CONSUME` 就是"再按一次退出"的机制,于是
+"栈空返回怎么办"不另设 API。
+
+### 8.6 栈恢复
+
+```c
+int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *, shrewd_lv_view_save_fn, void *ctx);
+int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *, shrewd_lv_view_load_fn, void *ctx);
+```
+
+保存的是**所有分支 + 模态栈的条目**(`desc->name` + params);恢复时靠 `name` 找回页面、
+按序重建、四阶段钩子按序调用。**「存到哪」归使用者**(architecture.md 6.11 Q3),
+框架负责产出有效快照、判定何时该存。
+
+## 9. 项目形态与脚手架
 
 项目叫 lvgl-vue,使用上就该有 **vue 味**。本节定**使用者的项目长什么样、怎么开箱**。
 调研依据:`create-vue` 的模板全树(192 项,已解析)与 Vue 官方 tooling 文档。
 
-### 8.1 "vue 味"是五件事
+### 9.1 "vue 味"是五件事
 
 | # | 是什么 | Vue 的形态 | 我们的落法 |
 |---|---|---|---|
@@ -392,9 +515,9 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 | **V5** | **按需特性 + 最小样板** | feature flags + `--bare` | CMake option + `--bare` |
 
 **V3 学不了 SFC**(立项文档非目标:无模板编译、无代码生成、无中间产物),但
-**「就近」在 C 里有表达**——见 §8.5。
+**「就近」在 C 里有表达**——见 §9.5。
 
-### 8.2 入口:框架不带 main
+### 9.2 入口:框架不带 main
 
 拓扑 A(独立进程)与拓扑 B(业务主进程里的一个线程)的入口不同,所以
 **框架不提供 `main`,也不持有主循环**——这正是「不隐藏线程」的落法。框架只给
@@ -411,7 +534,7 @@ while (1) { shrewd_lv_view_app_step(&app); usleep(5000); }
 `app_step()` 干三件事:**出队跨线程投递 → 逐个 `ref_set` → 驱动 `lv_timer_handler`**。
 它是**必需的调用点**——桥要在 UI 线程出队,而框架不持有循环,必须有个地方让调用方戳它。
 
-### 8.3 两种形态:默认 main,option 可选
+### 9.3 两种形态:默认 main,option 可选
 
 **开箱即用**:默认生成 `int main`,`cmake && build && run` 就能跑起来。
 
@@ -427,7 +550,7 @@ option(SHREWD_APP_AS_THREAD "Build as a library with gui_thread() instead of mai
 **不是用编译开关做两种库**——库是一样的,变的只是入口文件;option 只是**选建哪个
 target**。调试走独立,交付走线程。
 
-### 8.4 目录约定
+### 9.4 目录约定
 
 ```
 my-gui-app/
@@ -463,7 +586,7 @@ my-gui-app/
 **为什么与组件状态分开**:§6.3 的分离在目录上也成立——**数据模型跨组件共享,
 组件状态是组件私有的**。混在一个目录里,看不出谁是真相。
 
-### 8.5 就近内聚:一个组件一个目录
+### 9.5 就近内聚:一个组件一个目录
 
 没有 SFC,但**一个组件一个目录**——`.h`(接口)+ `.c`(实现)+ 可选资源 + 可选测试
 都在一处:
@@ -478,20 +601,20 @@ components/card/
 
 页面同理(`views/home/home.{h,c}`)。
 
-### 8.6 脚手架
+### 9.6 脚手架
 
 框架仓带 `template/app/` + `tools/new-app.sh <名字>`:
 
 | flag | 对应 |
 |---|---|
 | `--pages` | 页面管理(architecture.md §6) |
-| `--list` | 列表 / 条件渲染(§9) |
-| `--tests` | 无头测试夹具(§12) |
+| `--list` | 列表 / 条件渲染(§10) |
+| `--tests` | 无头测试夹具(§13) |
 | `--bare` | 最小样板 |
 
 **默认 `main`,option 切线程** —— 生成即能跑,这才叫开箱。
 
-## 9. 列表与条件渲染:对账原语
+## 10. 列表与条件渲染:对账原语
 
 立项文档定的口径:**容器子项按 key 最小对账,增删 lv 对象,不做 diff 算法**。
 
@@ -523,7 +646,7 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
 LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),够用;
 子项里编辑到一半的状态因此不会丢。这条不再挂待决。
 
-## 10. 跨线程桥
+## 11. 跨线程桥
 
 立项文档的口径:
 
@@ -549,7 +672,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 桥放在**本仓**(立项文档:"桥是唯一引用 LVGL API 的层,必须留在本仓库"),但**不进
 里程碑 2**——先有能单测的绑定层,再谈总线合流。
 
-## 11. 约定
+## 12. 约定
 
 - **命名**:`shrewd_lv_view_*` / `SHREWD_LV_VIEW_*`。讨论中的临时名不落代码。
 - **内存**:`shrewd_basic_platform_*`,不碰 `malloc`。所有记录都有对应的 dispose。
@@ -566,7 +689,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
   LVGL 与 shrewd-basic 的类型会出现在 API 形参里(§initiation.md 门面隔离:隔离的是
   实现,不是类型)。
 
-## 12. 测试策略
+## 13. 测试策略
 
 立项文档要求"绑定层可独立单测"。三层:
 
@@ -580,7 +703,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 给个空实现,`lv_tick_set_cb` 给个单调递增的假时钟。**不用**模拟渲染结果,断言一律
 查状态(LVGL 属性读回 + ref 槽位)。
 
-## 13. 里程碑切分
+## 14. 里程碑切分
 
 **M2(下一段)**:机制 + text/range + v-model + 组件生命周期
 1. `shrewd_lv_view_target_t` / `shrewd_lv_view_bind()` 底层机制,含 `applying` 与 DELETE 清理
@@ -593,7 +716,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 6. 跨线程桥与 sb_dbus 合流
 7. 真实页面原型倒推 API 手感(立项文档里程碑 3)
 
-## 14. 已决汇总与下一步
+## 15. 已决汇总与下一步
 
 D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 
@@ -602,8 +725,8 @@ D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 | **D1** | **作用域模型**:绑定随 widget 自清,组件 dispose 只删 root | §3 | Vue `effectScope` / React cleanup / Android LiveData 同构;只有 Flutter 偏手动,未采纳 |
 | **D2** | **两层**:机制单点 + 便捷函数 | §6 | 无参照,口味;可退成只给便捷函数 |
 | **D3** | **两种都支持**,`char[N]` 为 v-model 默认 | §5 | LVGL 自己就是「拷贝默认 + `_static` 借用」 |
-| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §11 | 家族的域分配法;不跨层重编码 |
-| **D5** | **不重复暴露**,随 `react.h` 自然可用 | §11 | `view.h` 必然引入 `react.h` |
+| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §12 | 家族的域分配法;不跨层重编码 |
+| **D5** | **不重复暴露**,随 `react.h` 自然可用 | §12 | `view.h` 必然引入 `react.h` |
 
 **D1 的契约**(状态 struct 必须活得比作用域久)由四阶段收口:销毁钩子先删 widget
 (级联解绑)、再释放状态,顺序写死,契约落在一处。页面管理的对应语义见
@@ -614,16 +737,18 @@ LVGL property / 片段走创建参数)、C3 事件、C4 slots(构建回调 + 命
 C5 组件级 v-model(传 ref 即双向)、C6 主题、C7 组合与作用域、C8 分发、
 C9 facade(三档)。
 
+**页面管理的 API 形状**(§8)也已落定:页面 = 片段 + 导航标识(同一套四阶段)、
+描述符、**实例调用方持有**(architecture.md 6.3「状态不丢」唯一能兑现的形态)、
+导航条目与操作集、守卫(全局一个、四种结果)、栈恢复。
+
 **下一步(不是待决,是未做)**:
 
-1. **页面管理的 API 形状**——architecture.md §6 定了机制骨架与默认值,C 结构体与
-   函数面还没落到本文件。
-2. **列表数据源**(§9)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
+1. **列表数据源**(§10)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
    未定。
-3. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
+2. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
    (§7.3 的硬要求),`tools/build-deps.sh` 要改。
-4. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
+3. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
    `error.h` 里登记(或在组合的约定文档里记明)。
-5. **M2 的实现**:§13 的里程碑切分。
-6. **脚手架实现**(§8.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
+4. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
    `SHREWD_APP_AS_THREAD` 的 CMake 选择。
+5. **M2 的实现**:§14 的里程碑切分。
