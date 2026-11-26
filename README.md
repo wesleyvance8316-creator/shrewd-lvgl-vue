@@ -15,8 +15,13 @@ house style; consumers include only `shrewd-lv-view/view.h`.
 
   ```
   tools/fetch-deps.sh && tools/build-deps.sh
-  cmake -S . -B build && cmake --build build && ctest --test-dir build
+  cmake -S . -B build -DCMAKE_PREFIX_PATH=build/prefix
+  cmake --build build && ctest --test-dir build
+  cmake --install build --prefix build/prefix
   ```
+
+  最后一步把**框架自己**也装进同一个前缀 —— 消费者应用靠
+  `find_package(shrewd-lv-view CONFIG)` 找它,缺了就编不过。
 
 - Dependencies: lvgl 9.6.0 and shrewd-basic, pinned in
   [deps/versions.lock](deps/versions.lock). Each is built as its own

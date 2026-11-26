@@ -129,4 +129,6 @@ build_one "$root/deps/lvgl" lvgl \
     -DLV_FETCH_DEPENDENCIES=OFF
 
 echo "dependencies installed to $prefix"
-echo "next: cmake -S . -B build -DCMAKE_PREFIX_PATH=$prefix"
+echo "next: build and install the framework into the same prefix:"
+echo "    cmake -S $root -B $root/build -DCMAKE_PREFIX_PATH=$prefix"
+echo "    cmake --build $root/build && cmake --install $root/build --prefix $prefix"

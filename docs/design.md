@@ -1,6 +1,6 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v6(2026-11-26);机制与 API 形状已决,构建配置已落地**。
+> 状态:**设计稿 v7(2026-11-26);设计已决,构建配置与脚手架已落地**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
@@ -838,10 +838,15 @@ C9 facade(三档)。
 `LV_BUILD_SET_CONFIG_OPTS=ON`。已实测:配置随包安装、私有头随包安装、
 自定义控件 + 类型化属性编译运行通过(`sizeof(lv_obj_class_t)=88`)。
 
+**脚手架**也已落地并实测:`template/app/` + `tools/new-app.sh`。
+生成的应用**真的编译、真的跑**(默认出可执行,`--thread` 出静态库)。
+
+顺带把**最小 app 层**实现了(`shrewd_lv_view_app_t` + `init/use/mount/step`),
+否则模板引用的 API 不存在、生成的项目编不过,"开箱即用"就落空。`app_mount`
+现在只做 create + enter,**导航栈是 M2 的活**。
+
 **下一步(不是待决,是未做)**:
 
-1. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
-   `error.h` 里登记(或在组合的约定文档里记明)。
-2. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
-   `SHREWD_APP_AS_THREAD` 的 CMake 选择。
-3. **M2 的实现**:§14 的里程碑切分。
+1. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,
+   不占用 shrewd-basic 的域分配法,**无需改动 shrewd-basic**。
+2. **M2 的实现**:§14 的里程碑切分(绑定层 + 页面管理的导航栈)。
