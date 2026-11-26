@@ -1,6 +1,6 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v2(2026-11-25),仅设计、未实现;D1–D5 已决**。
+> 状态:**设计稿 v3(2026-11-26),仅设计、未实现;D1–D5 与组件生态已决**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
@@ -183,7 +183,30 @@ int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t 
 为什么不只做便捷函数?那样 `applying`、DELETE 清理、写回接线会散进每个函数里,改一处
 要改 N 处。为什么不只做底层?因为立项文档写了"API 即产品",调用点的手感是交付物。
 
-## 7. 组件模型
+## 7. 组件与组件生态
+
+组件生态是"**使用者怎么开发、怎么用组件**"的形式化定义。机制面与默认值已全部落定;
+调研依据与被堵死的路见 §7.8。
+
+### 7.1 两种产出物
+
+组件库有两种产出物,**层次不同、形态不同**:
+
+| | **控件(widget class)** | **片段(UI 片段)** |
+|---|---|---|
+| 是什么 | **新的 `lv_obj` 类型** | **可复用的 UI 部分**(一棵树) |
+| 状态放哪 | 对象实例里(`instance_size`) | 状态 struct 里(ref) |
+| 怎么用 | 当 widget 用,可放任意容器 | 放进容器 |
+| props | **LVGL property**(ID + 类型) | **创建函数参数**(可序列化) |
+| 生命周期 | LVGL 的构造 / 析构 | **四阶段钩子**(自实现) |
+| 事件 | LVGL event + 自定义 event id | LVGL event(绑内部 widget) |
+| 组合 | 内部建子 widget | **作用域嵌套** |
+| 典型例子 | 自定义 gauge、color picker、chart | 卡片、表单、列表项、页面 |
+
+**选择准则**:要当"控件"用(可放任意容器、要属性反射、要像原生 widget)→ **控件**;
+要"复用一段 UI + 状态 + 生命周期"→ **片段**。片段内部可以用控件,方向不反。
+
+### 7.2 片段:UI 片段
 
 对齐立项文档:**状态 struct + 创建函数 + 销毁函数**,状态 struct 调用方内嵌。
 
@@ -195,14 +218,163 @@ typedef struct {
     shrewd_basic_reflect_ref_t level;   int32_t level_val;
 } shrewd_demo_card_t;
 
-int  shrewd_demo_card_create(shrewd_demo_card_t *c, lv_obj_t *parent);
+int  shrewd_demo_card_create(shrewd_demo_card_t *c, lv_obj_t *parent,
+                             const shrewd_demo_card_params_t *p);
 void shrewd_demo_card_dispose(shrewd_demo_card_t *c);   /* 就一行 lv_obj_delete(c->root) */
 ```
 
-- 创建函数:init 各 ref(槽位指向同 struct 里的字段)→ 建 widget 树 → 逐个绑定。
-- 销毁函数:按 §3 只需删 root,绑定级联自清。**不要**在里面手动 dispose 绑定——
-  那是机制的活。
-- 组件不碰 dbus(桥层才碰),所以组件可独立单测。
+- **创建函数**:init 各 ref(槽位指向同 struct 里的字段)→ 建 widget 树 → 逐个绑定。
+- **销毁函数**:按 §3 只需删 root,绑定级联自清。**不要**在里面手动 dispose 绑定
+  ——那是机制的活。
+- **生命周期**用 §architecture.md 6.2 的四阶段钩子(创建 / 激活 / 失活 / 销毁),
+  自实现,形状与 Android Fragment 一致(§7.8)。
+- **组合**:片段内建子片段,**作用域嵌套**——父作用域结束,子作用域一并自清(§3)。
+- **参数**(`params_t`)走 §6.11 的 Q2:**reflect 描述、只放简单值**;复杂数据走状态系统。
+- 组件**不碰 dbus**(桥层才碰),所以组件可独立单测。
+
+### 7.3 控件:widget class
+
+组件库可以往 LVGL 里**加新的控件类型**,与原生 widget 同等对待:
+
+```c
+typedef struct { lv_obj_t obj; int32_t value; /* … */ } mylib_gauge_t;
+
+extern const lv_obj_class_t mylib_gauge_class;              /* 类描述符 */
+extern const lv_property_ops_t mylib_gauge_properties[];    /* 属性表 */
+
+lv_obj_t *mylib_gauge_create(lv_obj_t *parent);
+void      mylib_gauge_set_value(lv_obj_t *g, int32_t v);
+```
+
+类描述符是 LVGL 的 `lv_obj_class_t`:`base_class`(继承)、`constructor_cb` /
+`destructor_cb`、`event_cb`、`instance_size`、属性表。
+
+> **⚠ 配置是硬要求,不是可选项。**
+> `struct _lv_obj_class_t` 的定义**只在 lvgl 私有头** `src/core/lv_obj_class_private.h`
+> (公共树只有前向声明),而属性字段在 `#if LV_USE_OBJ_PROPERTY` 里、**插在结构体中间**
+> ——开关不同则 `sizeof` 不同,**ABI 不兼容**。所以:
+
+| 配置 | 为什么必须 |
+|---|---|
+| **`LV_USE_PRIVATE_API`** | 才有 `lv_obj_class_t` 的完整定义 |
+| **`LV_USE_OBJ_PROPERTY`** | 类型化属性(props) |
+| **自带 `lv_conf.h`**(`LV_CONF_PATH`) | 它会被装进 `include/lvgl/config/`,`LV_CONF_INCLUDE_SIMPLE` 也传给消费者 → **全链程一致**。`LV_CONF_SKIP` 下配置不随包走,一致性无从谈起 |
+
+好消息:lvgl 的 `install.cmake` 已处理好分发——私有头装到 `include/lvgl_private/`
+并改写相对路径,控件作者 `#include "lvgl_private/lvgl_public.h"` 即可。
+
+**自带 `lv_conf.h` 与这两条开关无关,本来就该做**:面向嵌入式,内存 / 字体 / 功能
+裁剪该由我们定,不该吃 lvgl 默认。
+
+### 7.4 props、事件与组件级 v-model
+
+| | 控件 | 片段 |
+|---|---|---|
+| **props** | LVGL property(`LV_PROPERTY_ID(clz, name, type, index)`,类型编码在 ID 里) | 创建函数参数(reflect 描述) |
+| **事件** | LVGL event + 自定义 event id(`lv_event_register_id`) | LVGL event(绑内部 widget) |
+
+**组件级 v-model 不需要新机制** ——它是"参数里放 ref"的自然结果:
+
+```c
+typedef struct {
+    shrewd_basic_reflect_ref_t *value;   /* ← 传 ref 进来 */
+    int32_t min, max;
+} mylib_slider_params_t;
+```
+
+组件内部 `bind_slider_value(obj, params->value)` ——② 自动传播 + ③ 写回都在里头。
+**父既不写"更新"也不听"事件"**。这比 Vue 的 `:modelValue` + `@update:modelValue`
+省一层:那里是两条单向的语法糖,这里是直接把 ref 递进去。
+
+### 7.5 slots:构建回调 + 命名槽
+
+底层机制只有一个类型:
+
+```c
+/* 槽:父提供内容的构建方式,子决定何时、何处调用 */
+typedef void (*shrewd_lv_view_slot_fn)(lv_obj_t *slot, void *ctx);
+```
+
+**约定四条**:
+
+1. 组件在创建时接收槽(单槽,或多槽);
+2. 组件**在自己决定的时机**调用 `build(slot_container, ctx)` **一次**;
+3. 槽容器是组件建的 widget,槽内容成为它的子节点 → **绑定随 widget 自清**(§3),
+   生命周期自然闭环;
+4. 槽内容**内部可用绑定**(响应式)。
+
+**多槽用类型化结构**,不用字符串键——C 里编译期安全更值钱,而且结构体本身就是文档:
+
+```c
+typedef struct {
+    shrewd_lv_view_slot_fn header;   void *header_ctx;
+    shrewd_lv_view_slot_fn content;  void *content_ctx;
+    shrewd_lv_view_slot_fn footer;   void *footer_ctx;
+} mylib_panel_slots_t;
+
+int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
+                       const mylib_panel_params_t *params,
+                       const mylib_panel_slots_t *slots);
+```
+
+**框架只提供 `shrewd_lv_view_slot_fn` 这个约定类型 + 生命周期保证**;槽名由组件库
+用类型化结构定,各自自文档化又不失统一。
+
+> **边界**:slot 是**一次创建**。槽内容要**整体替换**(不同分支建不同的树)不是 slot
+> 的活,是**条件渲染 / 列表对账**(§8)的活。别混用。
+
+### 7.6 主题
+
+不自造主题引擎,LVGL 有:
+
+| | 机制 |
+|---|---|
+| **控件** | 走 **LVGL 主题**(`lv_obj_class_t.theme_inheritable` + `lv_theme_t`),与原生 widget 一致 |
+| **片段** | 暴露**可覆盖的 style 常量表**(设计 token),创建时套用 |
+
+### 7.7 facade:三档
+
+最早那句"消费者只 include `view.h`"要如实分档:
+
+| 角色 | 引用什么 |
+|---|---|
+| **应用开发者** | 只 `shrewd-lv-view/view.h` |
+| **片段作者** | `view.h` 就够 |
+| **控件作者**(造新 widget 类型) | `view.h` **+ `lvgl_private/lvgl_public.h`** |
+
+第三档确实打破了"只 include view.h"——因为 `lv_obj_class_t` 的定义在 **lvgl 的私有头**,
+而那是 **lvgl 的边界,不是我们的**。复制它的私有头是维护灾难,所以如实记为**扩展点**,
+不假装规则没破。
+
+**组件库本身就是普通 C 库**:`#include "shrewd-lv-view/view.h"`,导出自己的头,
+打成 CMake 包(`find_package` 导入)——与 shrewd-lv-view 被消费的方式完全一致。
+命名前缀用组件库自己的,不占用 `shrewd_`。
+
+### 7.8 调研依据与被堵死的路
+
+**两条路被调研堵死**(都来自 lvgl 9.6 vendored 源码与官方文档):
+
+| 发现 | 结论 |
+|---|---|
+| **`lv_fragment` 已废弃**,官方 Callout:"This module is now deprecated and will be removed in an upcoming release" | **不建在它上面**。但**采纳它的形态**——四阶段钩子(`constructor` / `attached` / `detached` / `obj_will_delete` / `destructor`)、`child_manager` 组合、`instance_size`,与我们独立推导的四阶段几乎一一对应 |
+| **`lv_menu` 已废弃**:"A menu is page navigation over base widgets … **Build it directly instead**" | LVGL 反复废弃现成组件、把 UI 组合推给使用者用基础 widget 搭。**控件之外的组合是我们的活** |
+| `struct _lv_obj_class_t` 在公共树只有前向声明 | 控件作者需要私有头 → facade 第三档(§7.7) |
+
+**两条依据支撑形状**:
+
+| 依据 | 支撑 |
+|---|---|
+| `lv_fragment` 文档:"View object … will be destroyed, but **instances created in class constructor will be kept**" | **状态与视图分离**——LVGL 自己也这么做,印证 §6.3 |
+| Vue 组件模型(props 声明 + 类型 + 校验、emits、slots 是函数参数) | 控件用 property 属性表;slots 用构建回调 |
+
+**Vue 组件生态的对照**(已取官方文档 `props` / `events` / `slots`):
+
+| Vue | 我们的对应 |
+|---|---|
+| `defineProps({title: String})` | 控件的 property 表(`LV_PROPERTY_ID`,类型编码在 ID 里) |
+| `$emit('someEvent')` + 声明式 emits | LVGL event + 自定义 event id |
+| `<slot>` / 具名槽 / scoped slot | `shrewd_lv_view_slot_fn` + 类型化多槽结构 |
+| Component v-model(`:modelValue` + `@update:`) | **传 ref 即双向**(§7.4),比它省一层 |
 
 ## 8. 列表与条件渲染:对账原语
 
@@ -322,10 +494,19 @@ D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 (级联解绑)、再释放状态,顺序写死,契约落在一处。页面管理的对应语义见
 [architecture.md](architecture.md) §6.2。
 
+**组件生态**(§7)也已全部落定:C1 组件形态(两种产出物)、C2 props(控件走
+LVGL property / 片段走创建参数)、C3 事件、C4 slots(构建回调 + 命名槽)、
+C5 组件级 v-model(传 ref 即双向)、C6 主题、C7 组合与作用域、C8 分发、
+C9 facade(三档)。
+
 **下一步(不是待决,是未做)**:
 
 1. **页面管理的 API 形状**——architecture.md §6 定了机制骨架与默认值,C 结构体与
    函数面还没落到本文件。
-2. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
+2. **列表数据源**(§8)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
+   未定。
+3. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
+   (§7.3 的硬要求),`tools/build-deps.sh` 要改。
+4. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
    `error.h` 里登记(或在组合的约定文档里记明)。
-3. **M2 的实现**:§12 的里程碑切分。
+5. **M2 的实现**:§12 的里程碑切分。
