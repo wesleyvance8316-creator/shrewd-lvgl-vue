@@ -22,4 +22,16 @@ target_link_libraries(shrewd-lv-view-deps
 
 add_test(NAME shrewd-lv-view.deps COMMAND shrewd-lv-view-deps)
 
+# 绑定机制的单测:无头 LVGL 夹具 + 机制断言(design.md §13)。
+add_executable(shrewd-lv-view-bind
+        test_bind.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-bind
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.bind COMMAND shrewd-lv-view-bind)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

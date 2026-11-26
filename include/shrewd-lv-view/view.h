@@ -131,6 +131,48 @@ int shrewd_lv_view_app_mount(shrewd_lv_view_app_t *app,
 int shrewd_lv_view_app_step(shrewd_lv_view_app_t *app);
 
 /*
+ * ==========================================================================
+ * 绑定:把 ref 接到 widget 上
+ * ==========================================================================
+ *
+ * 一条绑定就是一个 effect(docs/design.md §2):ref 变了自动写 widget,
+ * 反之(双向)widget 变了自动写回 ref。绑定随 widget 删除自清(design.md §3),
+ * 使用者不记不解绑。
+ */
+
+/**
+ * 属性适配器:描述"怎么写进 widget"与"怎么从 widget 读回"。
+ * `read` 为 NULL 即单向;非 NULL 即双向,并在 `changed_event` 上写回。
+ */
+typedef struct shrewd_lv_view_target {
+    /** ref → widget。@p value 指向 ref 的槽位,@p size 是其宽度。 */
+    void (*write)(void *obj, const void *value, size_t size);
+    /** widget → ref;返回 shrewd_lv_view_* 错误码。NULL = 单向。 */
+    int (*read)(void *obj, void *out, size_t size);
+    /** 写回触发的 LVGL 事件码(read 为 NULL 时忽略)。 */
+    uint32_t changed_event;
+} shrewd_lv_view_target_t;
+
+/**
+ * 建一条绑定。底层机制单点:applying 抑制、LV_EVENT_DELETE 清理都在这里。
+ * 上层的便捷函数只是薄壳。
+ */
+int shrewd_lv_view_bind(void *obj,
+                        const shrewd_lv_view_target_t *target,
+                        shrewd_basic_reflect_ref_t *ref);
+
+/* --- 便捷绑定(design.md §6)------------------------------------------ */
+
+/** label 的文本:单向。ref 槽位是 `char[N]`(design.md §5)。 */
+int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+
+/** slider 的值:双向。ref 槽位是 `int32_t`。 */
+int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+
+/** textarea 的文本:双向(v-model)。ref 槽位是 `char[N]`。 */
+int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+
+/*
  * The binding layer lands here (docs/initiation.md milestone 2): text /
  * range / v-model bindings and the component lifecycle. The reactive
  * core is not duplicated in this facade - it lives in shrewd-basic
