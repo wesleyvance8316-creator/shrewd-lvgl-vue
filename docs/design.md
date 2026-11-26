@@ -5,7 +5,7 @@
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
 > 本文只谈"代码怎么定形",不重复"为什么是这个模型"。
-> §13 是**已决汇总与下一步**;D1–D5 已落定,决策写在各自小节。
+> §14 是**已决汇总与下一步**;D1–D5 已落定,决策写在各自小节。
 
 ## 0. 读法
 
@@ -36,8 +36,8 @@
 | L3 | `lv_label_get_text` / `lv_textarea_get_text` 返回 **LVGL 自持指针** | 写回 ref **必须拷贝**,不能把指针塞进槽位 |
 | L4 | `lv_label_set_text` 自持拷贝(除非 `_static`) | 写方向安全:ref 里的字符串可以被状态方随后改写 |
 | L5 | `lv_slider_set_value(obj, v, anim)` 带 anim 参数 | 绑定一律传 `LV_ANIM_OFF`——反应式刷新不该带动画 |
-| L6 | 无头可跑:`lv_display_create` + `set_buffers` + `set_flush_cb` + `lv_tick_set_cb` | 单测不需要显示器,§11 有夹具 |
-| L7 | `lv_async_call(cb, user_data)` 由 `lv_timer_handler()` 驱动 | 跨线程桥(§9)的前提是调用方主循环在跑 `lv_timer_handler` |
+| L6 | 无头可跑:`lv_display_create` + `set_buffers` + `set_flush_cb` + `lv_tick_set_cb` | 单测不需要显示器,§12 有夹具 |
+| L7 | `lv_async_call(cb, user_data)` 由 `lv_timer_handler()` 驱动 | 跨线程桥(§10)的前提是调用方主循环在跑 `lv_timer_handler` |
 
 ### 1.3 家族约定
 
@@ -321,7 +321,7 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 用类型化结构定,各自自文档化又不失统一。
 
 > **边界**:slot 是**一次创建**。槽内容要**整体替换**(不同分支建不同的树)不是 slot
-> 的活,是**条件渲染 / 列表对账**(§8)的活。别混用。
+> 的活,是**条件渲染 / 列表对账**(§9)的活。别混用。
 
 ### 7.6 主题
 
@@ -376,7 +376,122 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 | `<slot>` / 具名槽 / scoped slot | `shrewd_lv_view_slot_fn` + 类型化多槽结构 |
 | Component v-model(`:modelValue` + `@update:`) | **传 ref 即双向**(§7.4),比它省一层 |
 
-## 8. 列表与条件渲染:对账原语
+## 8. 项目形态与脚手架
+
+项目叫 lvgl-vue,使用上就该有 **vue 味**。本节定**使用者的项目长什么样、怎么开箱**。
+调研依据:`create-vue` 的模板全树(192 项,已解析)与 Vue 官方 tooling 文档。
+
+### 8.1 "vue 味"是五件事
+
+| # | 是什么 | Vue 的形态 | 我们的落法 |
+|---|---|---|---|
+| **V1** | **一条命令开箱** | `npm create vue@latest` | `tools/new-app.sh <名字>` |
+| **V2** | **熟悉的目录形状** | `src/components/` `views/` `composables/` `stores/` | **同名同形** |
+| **V3** | **就近内聚** | SFC 三段式 | 一个组件一个目录 |
+| **V4** | **入口就是装配** | `main.ts` 的 `createApp().use().mount()` | `main.c` 的 `app_init().use().mount()` |
+| **V5** | **按需特性 + 最小样板** | feature flags + `--bare` | CMake option + `--bare` |
+
+**V3 学不了 SFC**(立项文档非目标:无模板编译、无代码生成、无中间产物),但
+**「就近」在 C 里有表达**——见 §8.5。
+
+### 8.2 入口:框架不带 main
+
+拓扑 A(独立进程)与拓扑 B(业务主进程里的一个线程)的入口不同,所以
+**框架不提供 `main`,也不持有主循环**——这正是「不隐藏线程」的落法。框架只给
+**单步函数**,调用方决定在哪跑:
+
+```c
+shrewd_lv_view_app_t app;
+shrewd_lv_view_app_init(&app, lv_display_get_default());
+shrewd_lv_view_app_use(&app, &mylib_plugin);      /* 装组件库 */
+shrewd_lv_view_app_mount(&app, &home_page);       /* 挂起始页 */
+while (1) { shrewd_lv_view_app_step(&app); usleep(5000); }
+```
+
+`app_step()` 干三件事:**出队跨线程投递 → 逐个 `ref_set` → 驱动 `lv_timer_handler`**。
+它是**必需的调用点**——桥要在 UI 线程出队,而框架不持有循环,必须有个地方让调用方戳它。
+
+### 8.3 两种形态:默认 main,option 可选
+
+**开箱即用**:默认生成 `int main`,`cmake && build && run` 就能跑起来。
+
+```cmake
+option(SHREWD_APP_AS_THREAD "Build as a library with gui_thread() instead of main()" OFF)
+```
+
+| 形态 | 产物 | 入口 | 用途 |
+|---|---|---|---|
+| **默认 standalone** | 可执行 | `app_main.c` 的 `main()` | **开箱、调试** |
+| `SHREWD_APP_AS_THREAD=ON` | 库 | `app_thread.c` 的 `gui_thread()` | 嵌入交付(拓扑 B) |
+
+**不是用编译开关做两种库**——库是一样的,变的只是入口文件;option 只是**选建哪个
+target**。调试走独立,交付走线程。
+
+### 8.4 目录约定
+
+```
+my-gui-app/
+├── CMakeLists.txt             ← option:SHREWD_APP_AS_THREAD
+├── lv_conf.h                  ← 自带 lvgl 配置(§7.3 硬要求)
+├── src/
+│   ├── app_main.c             ← 入口 A:独立进程(默认)
+│   ├── app_thread.c           ← 入口 B:线程函数(嵌入交付)
+│   ├── app.c / app.h          ← 装配:init / use / mount
+│   ├── stores/                ← ★ 数据模型
+│   │   ├── device.h / device.c
+│   │   └── app_state.h / app_state.c
+│   ├── components/            ← 组件(片段 / 控件),一目录一组件
+│   │   ├── card/   card.h  card.c
+│   │   └── gauge/  gauge.h gauge.c
+│   ├── views/                 ← 页面
+│   │   ├── home.h / home.c
+│   │   └── settings.h / settings.c
+│   ├── composables/           ← 复用逻辑
+│   └── assets/                ← 图片、字体
+├── tests/
+└── docs/
+```
+
+**`stores/` 放什么**:
+
+| 放 | 不放 |
+|---|---|
+| 数据结构定义(**含 reflect 描述** → 可序列化,支撑栈恢复与参数) | 组件的私有状态(跟组件目录) |
+| **应用级共享 ref**(设备状态、全局配置) | widget(那是 views / components) |
+| sb_dbus 路径约定与读写封装 | 业务逻辑(那是 composables) |
+
+**为什么与组件状态分开**:§6.3 的分离在目录上也成立——**数据模型跨组件共享,
+组件状态是组件私有的**。混在一个目录里,看不出谁是真相。
+
+### 8.5 就近内聚:一个组件一个目录
+
+没有 SFC,但**一个组件一个目录**——`.h`(接口)+ `.c`(实现)+ 可选资源 + 可选测试
+都在一处:
+
+```
+components/card/
+├── card.h
+├── card.c
+├── card_assets.h      ← 可选
+└── card_test.c        ← 可选
+```
+
+页面同理(`views/home/home.{h,c}`)。
+
+### 8.6 脚手架
+
+框架仓带 `template/app/` + `tools/new-app.sh <名字>`:
+
+| flag | 对应 |
+|---|---|
+| `--pages` | 页面管理(architecture.md §6) |
+| `--list` | 列表 / 条件渲染(§9) |
+| `--tests` | 无头测试夹具(§12) |
+| `--bare` | 最小样板 |
+
+**默认 `main`,option 切线程** —— 生成即能跑,这才叫开箱。
+
+## 9. 列表与条件渲染:对账原语
 
 立项文档定的口径:**容器子项按 key 最小对账,增删 lv 对象,不做 diff 算法**。
 
@@ -408,7 +523,7 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
 LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),够用;
 子项里编辑到一半的状态因此不会丢。这条不再挂待决。
 
-## 9. 跨线程桥
+## 10. 跨线程桥
 
 立项文档的口径:
 
@@ -434,7 +549,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 桥放在**本仓**(立项文档:"桥是唯一引用 LVGL API 的层,必须留在本仓库"),但**不进
 里程碑 2**——先有能单测的绑定层,再谈总线合流。
 
-## 10. 约定
+## 11. 约定
 
 - **命名**:`shrewd_lv_view_*` / `SHREWD_LV_VIEW_*`。讨论中的临时名不落代码。
 - **内存**:`shrewd_basic_platform_*`,不碰 `malloc`。所有记录都有对应的 dispose。
@@ -451,7 +566,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
   LVGL 与 shrewd-basic 的类型会出现在 API 形参里(§initiation.md 门面隔离:隔离的是
   实现,不是类型)。
 
-## 11. 测试策略
+## 12. 测试策略
 
 立项文档要求"绑定层可独立单测"。三层:
 
@@ -465,7 +580,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 给个空实现,`lv_tick_set_cb` 给个单调递增的假时钟。**不用**模拟渲染结果,断言一律
 查状态(LVGL 属性读回 + ref 槽位)。
 
-## 12. 里程碑切分
+## 13. 里程碑切分
 
 **M2(下一段)**:机制 + text/range + v-model + 组件生命周期
 1. `shrewd_lv_view_target_t` / `shrewd_lv_view_bind()` 底层机制,含 `applying` 与 DELETE 清理
@@ -478,7 +593,7 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 6. 跨线程桥与 sb_dbus 合流
 7. 真实页面原型倒推 API 手感(立项文档里程碑 3)
 
-## 13. 已决汇总与下一步
+## 14. 已决汇总与下一步
 
 D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 
@@ -487,8 +602,8 @@ D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 | **D1** | **作用域模型**:绑定随 widget 自清,组件 dispose 只删 root | §3 | Vue `effectScope` / React cleanup / Android LiveData 同构;只有 Flutter 偏手动,未采纳 |
 | **D2** | **两层**:机制单点 + 便捷函数 | §6 | 无参照,口味;可退成只给便捷函数 |
 | **D3** | **两种都支持**,`char[N]` 为 v-model 默认 | §5 | LVGL 自己就是「拷贝默认 + `_static` 借用」 |
-| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §10 | 家族的域分配法;不跨层重编码 |
-| **D5** | **不重复暴露**,随 `react.h` 自然可用 | §10 | `view.h` 必然引入 `react.h` |
+| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §11 | 家族的域分配法;不跨层重编码 |
+| **D5** | **不重复暴露**,随 `react.h` 自然可用 | §11 | `view.h` 必然引入 `react.h` |
 
 **D1 的契约**(状态 struct 必须活得比作用域久)由四阶段收口:销毁钩子先删 widget
 (级联解绑)、再释放状态,顺序写死,契约落在一处。页面管理的对应语义见
@@ -503,10 +618,12 @@ C9 facade(三档)。
 
 1. **页面管理的 API 形状**——architecture.md §6 定了机制骨架与默认值,C 结构体与
    函数面还没落到本文件。
-2. **列表数据源**(§8)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
+2. **列表数据源**(§9)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
    未定。
 3. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
    (§7.3 的硬要求),`tools/build-deps.sh` 要改。
 4. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
    `error.h` 里登记(或在组合的约定文档里记明)。
-5. **M2 的实现**:§12 的里程碑切分。
+5. **M2 的实现**:§13 的里程碑切分。
+6. **脚手架实现**(§8.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
+   `SHREWD_APP_AS_THREAD` 的 CMake 选择。
