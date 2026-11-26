@@ -1,6 +1,6 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v4(2026-11-26),仅设计、未实现;D1–D5、组件生态、页面管理 API 已决**。
+> 状态:**设计稿 v5(2026-11-26),仅设计、未实现;所有机制的 API 形状已决**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
@@ -617,17 +617,48 @@ components/card/
 ## 10. 列表与条件渲染:对账原语
 
 立项文档定的口径:**容器子项按 key 最小对账,增删 lv 对象,不做 diff 算法**。
+条件渲染是它的退化形态(key 集合是 0 或 1),共用一个原语。
 
-条件渲染是它的退化形态(key 集合是 0 或 1),所以共用一个原语:
+### 10.1 两种变化,两个机制
+
+先分清列表的两类变化——它们**不走同一个机制**:
+
+| 变化 | 机制 | 谁触发 |
+|---|---|---|
+| **内容变化**(某个子项的字段变了) | **反应式**(§2) | item 里的 ref |
+| **结构变化**(增删 / 重排) | **对账**(本节) | `source` ref |
+
+这样对账不必管"更新内容",也不必重跑 `build`(见 §10.4)。
+
+### 10.2 `source` ref 的槽位
+
+对齐 Vue 的 `v-for="item in list"` —— **ref 持有列表本身**:
+
+```c
+/* ref 槽位类型 */
+typedef struct {
+    const void *items;   /* 连续数组;抽象源为 NULL */
+    uint32_t    count;
+} shrewd_lv_view_list_t;
+```
+
+**结构变了**(增删 / 重排)→ `ref_set` 整个结构 → 触发对账。
+**抽象源**(如 sb_dbus 的 `/devices/*`)`items = NULL`,靠 `at` 回调取数据。
+
+**`count` 由 ref 承载,不再做回调** —— 结构的真相只有一处。
+
+### 10.3 数据源描述
 
 ```c
 typedef struct {
-    size_t   item_size;                  /* 每项数据的宽度 */
-    uint32_t (*count)(const void *ctx);
-    const void *(*at)(const void *ctx, uint32_t i);   /* 指向第 i 项数据 */
-    uint32_t (*key)(const void *ctx, uint32_t i);     /* 稳定标识 */
-    int  (*build)(void *item_ctx, lv_obj_t *container, void *item);
-    void (*teardown)(void *item_ctx);
+    /* 数据访问:at 为 NULL 时用 items + item_size 推导 */
+    const void *(*at)(const void *ctx, uint32_t i);
+    uint32_t (*key)(const void *ctx, uint32_t i);   /* 稳定标识,必需 */
+    size_t item_size;
+
+    /* 子项 */
+    lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item);
+    void (*teardown)(void *ctx, lv_obj_t *root, const void *item);   /* 可选 */
 } shrewd_lv_view_list_desc_t;
 
 int shrewd_lv_view_bind_list(lv_obj_t *container,
@@ -636,15 +667,42 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
                              void *ctx);
 ```
 
-对账规则(最小的那一种):
+**`item_ctx` 不需要了** —— 按 §3 的模型,**子项的状态在数据源里(含 ref),widget 只是
+投影**。所以子项的 root widget 就是它的句柄:
 
-1. 逐个 key 查现有子项;**命中** → 复用,只更新数据与绑定;
+- `build` **返回子项 root**;
+- `teardown` **可选**(`NULL` = 就删 widget,绑定按 §3 级联自清)。
+
+没有"widget 之外的子项私有资源"——有状态就在数据源里,没状态就只有 widget。
+
+### 10.4 对账规则(最小的那一种)
+
+1. 逐个 key 查现有子项;**命中** → **复用,不重建**;
 2. **未命中** → `build` 建新子项;
-3. 扫一遍现有子项,数据里没有的 key → `teardown` + `lv_obj_delete`(绑定按 §3 级联自清)。
+3. 扫一遍现有子项,数据里没有的 key → `teardown`(可选)+ `lv_obj_delete`。
+
+> **注意第 1 条**:命中是**复用,不是"更新数据与绑定"**。`build` **只跑一次** ——
+> 若让它重跑,会再挂一套绑定(泄漏)。内容要变,就得是 item 里的 ref(§10.1)。
 
 **顺序变化**(key 集合相同但次序不同):把已有对象挪到目标位置,**不重建**。
 LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),够用;
-子项里编辑到一半的状态因此不会丢。这条不再挂待决。
+子项里编辑到一半的状态因此不会丢。
+
+### 10.5 两条契约 / 要求
+
+**契约**:
+
+> **`at(i)` 返回的指针,在子项存活期间必须稳定。**
+
+否则复用的 widget 绑定会指向失效内存。数据源若会重建数组,须让 key 变化(或通知)
+触发重建。
+
+**设计要求**:
+
+> **子项的数据结构里要含 ref**,否则内容变化反映不出来。
+
+静态列表(菜单项)也照做 —— ref 不变就是了,不影响。
+
 
 ## 11. 跨线程桥
 
@@ -741,14 +799,16 @@ C9 facade(三档)。
 描述符、**实例调用方持有**(architecture.md 6.3「状态不丢」唯一能兑现的形态)、
 导航条目与操作集、守卫(全局一个、四种结果)、栈恢复。
 
+**列表数据源**(§10)也已落定:`source` ref 槽位 = `shrewd_lv_view_list_t`,
+`item_ctx` 不需要(`build` 返回子项 root、`teardown` 可选),**两种变化走两个机制**
+(内容变化走反应式 / 结构变化走对账),`build` 只跑一次。
+
 **下一步(不是待决,是未做)**:
 
-1. **列表数据源**(§10)——`bind_list` 的 `source` ref 槽位存什么、`item_ctx` 谁分配,
-   未定。
-2. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
+1. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
    (§7.3 的硬要求),`tools/build-deps.sh` 要改。
-3. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
+2. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
    `error.h` 里登记(或在组合的约定文档里记明)。
-4. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
+3. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
    `SHREWD_APP_AS_THREAD` 的 CMake 选择。
-5. **M2 的实现**:§14 的里程碑切分。
+4. **M2 的实现**:§14 的里程碑切分。
