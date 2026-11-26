@@ -97,10 +97,13 @@ pub/sub、多进程)归 sb_dbus;状态依赖("谁读过谁自动跟",computed
 `add_subdirectory`,也没有 FetchContent 进构建树**。本仓自己同样导出
 `shrewd-lv-view::shrewd-lv-view`,进上层项目走的是同一条标准路径。
 
-- **lvgl** 用 `-DLV_CONF_SKIP=ON`:不带 `lv_conf.h` 也能自洽编译,而且
-  lvgl 会把该定义写进安装接口(`lvgl_install_definitions`),下游看到的
-  是同一份配置。`LV_FETCH_DEPENDENCIES=OFF` 是保险丝——真要联网拉依赖时
-  直接报错,而不是悄悄拉一个 versions.lock 里没有的东西。
+- **lvgl** 用本仓自带的 `config/lv_conf.h`(`-DLV_BUILD_CONF_PATH`),**不用
+  `LV_CONF_SKIP`**。它会随 lvgl 一起安装到 `include/lvgl/config/`,下游编译到的
+  是同一份配置 —— 这是 ABI 的硬要求(`lv_obj_class_t` 的布局依赖
+  `LV_USE_OBJ_PROPERTY`)。`-DLV_BUILD_SET_CONFIG_OPTS=ON` 是必需的:lvgl 靠它从
+  lv_conf.h 推导 `CONFIG_LV_USE_PRIVATE_API`,而私有头的安装就看这个开关。
+  `LV_FETCH_DEPENDENCIES=OFF` 是保险丝——真要联网拉依赖时直接报错,而不是悄悄拉
+  一个 versions.lock 里没有的东西。
 - 头文件写 `#include "lvgl/lvgl.h"`,不是 `"lvgl.h"`:后者是 lvgl 源码树
   根上的垫片,装出来的包里没有它;前者在安装包和源码树里都成立。
 - **shrewd-basic** 默认从兄弟仓 `../shrewd-basic` 同步(预 1.0,API 还在

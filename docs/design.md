@@ -1,6 +1,6 @@
 # shrewd-lv-view 详细设计
 
-> 状态:**设计稿 v5(2026-11-26),仅设计、未实现;所有机制的 API 形状已决**。
+> 状态:**设计稿 v6(2026-11-26);机制与 API 形状已决,构建配置已落地**。
 > 上游:[architecture.md](architecture.md)(模型与架构——为什么是响应式、
 > 数据/事件/页面的关系、线程模型、页面管理)。**先读那份**,本文假定它已被接受。
 > 更上游:[initiation.md](initiation.md)(立项、目标与非目标)。
@@ -32,7 +32,7 @@
 | # | 行为 | 对本层的后果 |
 |---|---|---|
 | L1 | `lv_obj_add_event_cb(obj, cb, filter, user_data)` → `lv_event_dsc_t*` | 绑定的清理钩子有处可挂(`LV_EVENT_DELETE`) |
-| L2 | `LV_USE_EXT_DATA` **默认 0** | `lv_event_desc_set_external_data` 那套带析构的私有数据**用不了**(我们用 `LV_CONF_SKIP`,取的就是默认)。清理必须自己写 |
+| L2 | `LV_USE_EXT_DATA` **默认 0** | `lv_event_desc_set_external_data` 那套带析构的私有数据**用不了**。清理必须自己写 |
 | L3 | `lv_label_get_text` / `lv_textarea_get_text` 返回 **LVGL 自持指针** | 写回 ref **必须拷贝**,不能把指针塞进槽位 |
 | L4 | `lv_label_set_text` 自持拷贝(除非 `_static`) | 写方向安全:ref 里的字符串可以被状态方随后改写 |
 | L5 | `lv_slider_set_value(obj, v, anim)` 带 anim 参数 | 绑定一律传 `LV_ANIM_OFF`——反应式刷新不该带动画 |
@@ -258,10 +258,40 @@ void      mylib_gauge_set_value(lv_obj_t *g, int32_t v);
 |---|---|
 | **`LV_USE_PRIVATE_API`** | 才有 `lv_obj_class_t` 的完整定义 |
 | **`LV_USE_OBJ_PROPERTY`** | 类型化属性(props) |
-| **自带 `lv_conf.h`**(`LV_CONF_PATH`) | 它会被装进 `include/lvgl/config/`,`LV_CONF_INCLUDE_SIMPLE` 也传给消费者 → **全链程一致**。`LV_CONF_SKIP` 下配置不随包走,一致性无从谈起 |
+| **自带 `lv_conf.h`**(`-DLV_BUILD_CONF_PATH`) | 它会被装进 `include/lvgl/config/`,`LV_CONF_INCLUDE_SIMPLE` 也传给消费者 → **全链程一致**。`LV_CONF_SKIP` 下配置不随包走,一致性无从谈起 |
 
 好消息:lvgl 的 `install.cmake` 已处理好分发——私有头装到 `include/lvgl_private/`
-并改写相对路径,控件作者 `#include "lvgl_private/lvgl_public.h"` 即可。
+并改写相对路径。**控件作者要引四个头**(照 lvgl 自己 widget 的写法,已实测):
+
+```c
+#include "lvgl_private/lvgl_public.h"
+#include "lvgl_private/core/lv_obj_private.h"          /* lv_obj_t 的完整定义 */
+#include "lvgl_private/core/lv_obj_class_private.h"    /* lv_obj_class_t 的完整定义 */
+```
+
+**属性号段要自己划**:`lv_obj_property.h` 里 `LV_PROPERTY_ID_BUILTIN_LAST = 0xffff` 的
+注释明写 *"ID of 0x10000 ~ 0xfffffff is reserved for user"*。所以:
+
+```c
+enum {
+    LV_PROPERTY_PROBE_START = 0x10000,          /* ← 自定义号段从这里起 */
+    LV_PROPERTY_PROBE_VALUE = LV_PROPERTY_PROBE_START + 0,
+    LV_PROPERTY_PROBE_END,
+};
+static const lv_property_ops_t lv_gauge_properties[] = { … };   /* ★ 必须叫 lv_<widget>_properties */
+
+const lv_obj_class_t mylib_gauge_class = {
+    .instance_size = sizeof(mylib_gauge_t),
+    .base_class = &lv_obj_class,
+    .name = "mylib_gauge",
+    LV_PROPERTY_CLASS_FIELDS(gauge, PROBE)      /* 展开找 lv_gauge_properties */
+};
+```
+
+两个坑:`LV_PROPERTY_ID(...)` 是**枚举声明**用的宏,不能直接写进数组初始化器;
+`LV_PROPERTY_CLASS_FIELDS(widget, uppercase)` 会去找 `lv_<widget>_properties`,
+名字不对就编译不过。**这些是探针实测出来的**(`/tmp/lvcfg/probe.c` 编译运行通过:
+`sizeof(lv_obj_class_t)=88`、属性号段 `0x10000` 生效)。
 
 **自带 `lv_conf.h` 与这两条开关无关,本来就该做**:面向嵌入式,内存 / 字体 / 功能
 裁剪该由我们定,不该吃 lvgl 默认。
@@ -555,7 +585,7 @@ target**。调试走独立,交付走线程。
 ```
 my-gui-app/
 ├── CMakeLists.txt             ← option:SHREWD_APP_AS_THREAD
-├── lv_conf.h                  ← 自带 lvgl 配置(§7.3 硬要求)
+├── lv_conf.h                  ← 可选:覆盖框架默认(经 `tools/build-deps.sh --lv-conf`)
 ├── src/
 │   ├── app_main.c             ← 入口 A:独立进程(默认)
 │   ├── app_thread.c           ← 入口 B:线程函数(嵌入交付)
@@ -803,12 +833,15 @@ C9 facade(三档)。
 `item_ctx` 不需要(`build` 返回子项 root、`teardown` 可选),**两种变化走两个机制**
 (内容变化走反应式 / 结构变化走对账),`build` 只跑一次。
 
+**构建配置落地**也已完成:`config/lv_conf.h`(最小配置,只写差异)+
+`tools/build-deps.sh --lv-conf`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`,
+`LV_BUILD_SET_CONFIG_OPTS=ON`。已实测:配置随包安装、私有头随包安装、
+自定义控件 + 类型化属性编译运行通过(`sizeof(lv_obj_class_t)=88`)。
+
 **下一步(不是待决,是未做)**:
 
-1. **构建配置落地**——自带 `lv_conf.h`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`
-   (§7.3 的硬要求),`tools/build-deps.sh` 要改。
-2. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
+1. **与 shrewd-basic 的跨仓约定**:`-600..-699` 保留给 lv_view,需在 shrewd-basic 的
    `error.h` 里登记(或在组合的约定文档里记明)。
-3. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
+2. **脚手架实现**(§9.6)—— `template/app/` + `tools/new-app.sh`,含两种入口与
    `SHREWD_APP_AS_THREAD` 的 CMake 选择。
-4. **M2 的实现**:§14 的里程碑切分。
+3. **M2 的实现**:§14 的里程碑切分。

@@ -15,6 +15,7 @@
 # Usage: tools/build-deps.sh [options]
 #   --prefix DIR       install prefix (default: <root>/build/prefix)
 #   --build-type TYPE  CMAKE_BUILD_TYPE (default: Release)
+#   --lv-conf FILE     lvgl configuration (default: <root>/config/lv_conf.h)
 #   --clean            drop the dependency build trees and the prefix first
 set -eu
 
@@ -22,6 +23,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(dirname "$here")
 prefix="$root/build/prefix"
 build_type=Release
+lv_conf="$root/config/lv_conf.h"
 clean=0
 
 while [ $# -gt 0 ]; do
@@ -34,13 +36,17 @@ while [ $# -gt 0 ]; do
             build_type=$2
             shift 2
             ;;
+        --lv-conf)
+            lv_conf=$2
+            shift 2
+            ;;
         --clean)
             clean=1
             shift
             ;;
         -h | --help)
             echo "usage: tools/build-deps.sh [--prefix DIR]" \
-                 "[--build-type TYPE] [--clean]"
+                 "[--build-type TYPE] [--lv-conf FILE] [--clean]"
             exit 0
             ;;
         *)
@@ -49,6 +55,12 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
+
+if [ ! -f "$lv_conf" ]; then
+    echo "build-deps: no lv_conf.h at $lv_conf" >&2
+    echo "            (pass --lv-conf FILE, or restore config/lv_conf.h)" >&2
+    exit 1
+fi
 
 if [ "$clean" -eq 1 ]; then
     echo "== clean"
@@ -91,9 +103,16 @@ build_one "$root/deps/shrewd-basic" shrewd-basic \
     -DSHREWD_BASIC_BUILD_TESTS=OFF \
     -DSHREWD_BASIC_BUILD_PROGRAMS=OFF
 
-# lvgl: LV_CONF_SKIP makes the build self-contained - no lv_conf.h to
-# supply, and lvgl writes the define into its install interface so every
-# consumer compiles against the same configuration.
+# lvgl: configured by our own lv_conf.h. It is **installed alongside lvgl**
+# (lvgl's install.cmake does this whenever LV_CONF_SKIP is off), so every
+# consumer compiles against the same configuration. That is an ABI
+# requirement, not a convenience: lv_obj_class_t's layout depends on
+# LV_USE_OBJ_PROPERTY (docs/design.md §7.3).
+#
+# LV_BUILD_SET_CONFIG_OPTS is not optional here: lvgl derives
+# CONFIG_LV_USE_PRIVATE_API from lv_conf.h through it, and install.cmake
+# gates the private-header install on that. Without it, widget classes
+# stay unbuildable for component libraries.
 #
 # Demos, examples and ThorVG default to ON upstream and are pure ballast
 # here. LV_FETCH_DEPENDENCIES is the fuse: with it OFF a build that would
@@ -101,7 +120,8 @@ build_one "$root/deps/shrewd-basic" shrewd-basic \
 # dependency that is not pinned in versions.lock.
 build_one "$root/deps/lvgl" lvgl \
     -DLV_BUILD_INSTALL=ON \
-    -DLV_CONF_SKIP=ON \
+    -DLV_BUILD_CONF_PATH="$lv_conf" \
+    -DLV_BUILD_SET_CONFIG_OPTS=ON \
     -DLV_BUILD_TESTS=OFF \
     -DCONFIG_LV_BUILD_DEMOS=OFF \
     -DCONFIG_LV_BUILD_EXAMPLES=OFF \
