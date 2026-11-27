@@ -72,6 +72,18 @@ static void entry_free_params(shrewd_lv_view_nav_entry_t *e) {
     }
 }
 
+/**
+ * 清掉一个**已失活**的条目:销毁 widget 树 + 释放参数副本。
+ *
+ * 不再走 exit —— 它在被盖住的那一刻已经 exit 过(§6.2 顺序确定,一次不多
+ * 一次不少)。用在 `remove_until` 的下层清理:那些层早已不是活动页,直接
+ * 出栈就得连壳带参数一起还掉。
+ */
+static void entry_discard(shrewd_lv_view_nav_entry_t *e) {
+    entry_destroy(e);
+    entry_free_params(e);
+}
+
 /** 缓存预算:RELEASE_CACHE 最多留 cache_count 个已建的,超出按最久未激活淘汰。 */
 static void enforce_cache(shrewd_lv_view_nav_t *nav) {
     size_t budget = 0;
@@ -485,6 +497,48 @@ int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
         }
     }
     return SHREWD_LV_VIEW_ERR_NAV_EMPTY;
+}
+
+int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *nav,
+                                    shrewd_lv_view_page_t *page,
+                                    const void *params,
+                                    shrewd_lv_view_nav_pred_fn pred,
+                                    void *ctx) {
+    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    /* 这是"离开当前页 + 去新页",守卫同 push。 */
+    shrewd_lv_view_page_t *redirect = NULL;
+    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
+    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
+        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
+    }
+    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
+        page = (NULL != redirect) ? redirect : page;
+    }
+    (void)shrewd_lv_view_nav_register(nav, page);
+    shrewd_lv_view_nav_stack_t *stack = nav_active(nav);
+    int status = stack_push(nav, stack, nav_active_host(nav), page, params);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    /* 清下层:新栈顶以下,**谓词不命中的逐个清掉**,第一个命中的留下
+       (连同它以下全部)。pred == NULL 恒不命中 —— 锚点以下全清。
+       每次只清"倒数第二",所以它上面只有新栈顶,挪下来补位即可。 */
+    while (1 < stack->count) {
+        shrewd_lv_view_nav_entry_t *e = &stack->entries[stack->count - 2];
+        if ((NULL != pred) && (0 != pred(ctx, e->page))) {
+            break;
+        }
+        entry_discard(e);
+        stack->entries[stack->count - 2] = stack->entries[stack->count - 1];
+        stack->count -= 1;
+    }
+    enforce_cache(nav);
+    return SHREWD_LV_VIEW_ERR_OK;
 }
 
 int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,

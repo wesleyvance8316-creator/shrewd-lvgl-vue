@@ -2,7 +2,8 @@
  * @file test_nav.c
  * @brief 导航栈的单测(architecture.md §6.6–6.7 / design.md §8)。
  *
- * 验五件事:四阶段顺序、释放策略、pop_until 的谓词语义、栈深上限、守卫四种结果。
+ * 验六件事:四阶段顺序、释放策略、pop_until 的谓词语义、栈深上限、守卫四种结果、
+ * remove_until 的「压栈并清掉中间若干层」。
  */
 #include <stdio.h>
 #include <string.h>
@@ -151,6 +152,82 @@ static int pred_is_b(void *ctx, const shrewd_lv_view_page_t *page) {
     return (0 == strcmp("test", page->desc->name)) && (page == (const shrewd_lv_view_page_t *)ctx);
 }
 
+/* --- 6. remove_until:压栈并清掉中间若干层(architecture.md §6.6)------ */
+
+static int pred_is_home(void *ctx, const shrewd_lv_view_page_t *page) {
+    return (page == (const shrewd_lv_view_page_t *)ctx);
+}
+
+static int pred_never(void *ctx, const shrewd_lv_view_page_t *page) {
+    (void)ctx;
+    (void)page;
+    return 0;
+}
+
+static void test_remove_until(void) {
+    printf("test_remove_until\n");
+    shrewd_lv_view_nav_t nav;
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
+          "nav_init");
+
+    /* 流程页全用 RESIDENT:被盖住时不销毁,只有真出栈才该销毁 ——
+       这样"清掉"是真的还掉了 widget 树,而不是碰巧早已销毁。 */
+    test_page_t home;
+    test_page_t w1;
+    test_page_t w2;
+    test_page_t done;
+    page_init(&home, &g_desc_resident);
+    page_init(&w1, &g_desc_resident);
+    page_init(&w2, &g_desc_resident);
+    page_init(&done, &g_desc_resident);
+
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_push(&nav, &home.base, NULL), "push home");
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_push(&nav, &w1.base, NULL), "push w1");
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_push(&nav, &w2.base, NULL), "push w2");
+    check(3 == shrewd_lv_view_nav_depth(&nav), "depth 3 before");
+
+    /* [home, w1, w2] --remove_until(done, pred=is_home)--> [home, done] */
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_remove_until(&nav, &done.base, NULL, pred_is_home, &home.base),
+          "remove_until(home)");
+    check(2 == shrewd_lv_view_nav_depth(&nav), "depth 2 after");
+    check(&done.base == shrewd_lv_view_nav_top(&nav), "top is done");
+    /* home 命中谓词 → 留下,常驻树不该被销毁 */
+    check(0 == home.destroy_calls, "home kept (not destroyed)");
+    check(&home.base == nav.branches[nav.current].entries[0].page, "home is still the bottom");
+    /* w1/w2 被清掉:各 exit 一次(被盖住时)、destroy 一次(出栈时) */
+    check((1 == w1.exit_calls) && (1 == w1.destroy_calls), "w1 exit once, destroyed once");
+    check((1 == w2.exit_calls) && (1 == w2.destroy_calls), "w2 exit once, destroyed once");
+
+    /* pred == NULL:恒不命中 → 锚点以下全清,栈里只剩新页 */
+    test_page_t root;
+    test_page_t solo;
+    page_init(&root, &g_desc_resident);
+    page_init(&solo, &g_desc_resident);
+    shrewd_lv_view_nav_t nav2;
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav2, lv_screen_active(), lv_layer_top(), 0),
+          "nav_init 2");
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_push(&nav2, &root.base, NULL), "push root");
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_push(&nav2, &w1.base, NULL), "push w1 (2)");
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_remove_until(&nav2, &solo.base, NULL, NULL, NULL),
+          "remove_until with NULL pred");
+    check(1 == shrewd_lv_view_nav_depth(&nav2), "only the new page left");
+    check(&solo.base == shrewd_lv_view_nav_top(&nav2), "top is solo");
+    check(1 == root.destroy_calls, "root cleared too (pred NULL)");
+
+    /* pred 恒不命中:同上,清到只剩锚点 */
+    test_page_t solo2;
+    page_init(&solo2, &g_desc_resident);
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_remove_until(&nav2, &solo2.base, NULL, pred_never, NULL),
+          "remove_until with never-matching pred");
+    check(1 == shrewd_lv_view_nav_depth(&nav2), "still one page");
+    check(&solo2.base == shrewd_lv_view_nav_top(&nav2), "top is solo2");
+}
+
 static void test_pop_until(void) {
     printf("test_pop_until\n");
     shrewd_lv_view_nav_t nav;
@@ -260,6 +337,7 @@ int main(void) {
     test_four_stages();
     test_release_policy();
     test_pop_until();
+    test_remove_until();
     test_stack_limit();
     test_guard_results();
     if (0 == g_fail) {

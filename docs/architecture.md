@@ -696,10 +696,16 @@ while (1) {
 | `pop` | 返回一层 | 弹栈 |
 | `replace` | 同级跳转 / tab 切换 | 否 |
 | `pop_until(predicate)` | **按谓词连续 pop**,中间逐个 exit + 销毁 | 弹栈 |
-| `remove_until(route, predicate)` | 压栈并清掉中间若干层 | 是 |
+| `remove_until(route, params, predicate)` | 压栈并清掉中间若干层 | 是 |
 
 **跨级返回按谓词,不按索引**(调研修正)。`pop_until(predicate)` 从栈顶往下找第一个
 满足的,于是"回到哪个 `a`"的歧义自然消解——**取最近的那个**。索引在递归场景下脆弱。
+
+**`remove_until` 是「压栈 + 清下层」**(对齐 Flutter `pushAndRemoveUntil`):把 route
+压成新栈顶(产生历史),再把它下面谓词**不命中**的层逐个清掉,第一个**命中**的留下
+(连同它以下全部)。与 `pop_until` 的分工 —— 后者回到**栈里已有**的那层并留下它;
+前者去一个**可能不在栈里**的新页,顺手清掉中间几层(home 不在栈里时 `pop_until`
+表达不了)。谓词传 NULL 表示恒不命中:锚点以下全清。
 
 **递归嵌套天然支持**:
 

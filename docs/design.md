@@ -492,9 +492,9 @@ int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *, size_t branch);
 int shrewd_lv_view_nav_modal_push(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page,
                                   const void *params);
 
-/* 未实现(M3) */
-int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *anchor,
-                                    shrewd_lv_view_nav_pred_fn, void *ctx);
+/* 已实现 —— 压栈并清掉中间若干层(architecture.md §6.6) */
+int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page,
+                                    const void *params, shrewd_lv_view_nav_pred_fn, void *ctx);
 ```
 
 **分支与模态是同一套操作作用在不同的栈上**:`switch_branch` 换分支(不产生历史);
@@ -508,6 +508,21 @@ int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, shrewd_lv_view_page_
 
 `pop_until` / `remove_until` **按谓词不按索引**(architecture.md 6.6 的调研修正);
 谓词从栈顶往下找第一个满足的,递归场景的歧义自然消解为"取最近的那个"。
+
+> **实现修正(`remove_until`)**:三处稿子对不齐 —— §6.6 表格写「压栈并清掉中间
+> 若干层 / 产生历史=是」,§15 一句写「`pop_until` 的变体,加个锚点」,上面这个
+> 签名既没有 `params` 又管新页叫 `anchor`。**按 §6.6 表格定**(它经调研对齐
+> Flutter `pushAndRemoveUntil`,`route`/`predicate` 两个参数一一对应):
+>
+> - **压栈并清下层**:把新页压成栈顶(**产生历史**),再从它下面一层往下,
+>   谓词不命中的逐个清掉,第一个命中的留下(连同它以下全部)。
+> - 签名随 `push` 走:第二个参数是**新页**,并且**要有 `params`**(压页总要参数)。
+> - `pred == NULL` **恒不命中** → 锚点以下全清,栈里只剩新页。这是最常见的用法
+>   (登录/向导结束直达 home),不必为此写一个恒假谓词。
+>
+> 它与 `pop_until` 的分工:`pop_until` **回到栈里已有的那层**(它留下);
+> `remove_until` **去一个可能不在栈里的新页**,并把中间几层清掉。home 不在栈里时
+> `pop_until` 表达不了。
 
 **分支与模态是同一套操作作用在不同的栈上**(architecture.md 6.9):
 `nav_switch_branch()` 切分支(不产生历史),模态栈独立、释放策略可不同。
@@ -920,10 +935,14 @@ C9 facade(三档)。
 内容区 + 底栏,`nav->host` 指到内容区;**标题栏显当前页名是 nav 状态的绑定**,
 导航变了自动跟,不手动同步。
 
+**`remove_until`** 也已实现(architecture.md §6.6「压栈并清掉中间若干层」,
+对齐 Flutter `pushAndRemoveUntil`):把新页压成栈顶,再把它下面谓词不命中的层
+逐个清掉,第一个命中的留下;`pred == NULL` 则锚点以下全清。语义取舍见 §8.4 的
+实现修正。
+
 **下一步(不是待决,是未做)**:
 
-1. **`remove_until`** —— `pop_until` 的变体,加个锚点。
-2. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,不占用
+1. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,不占用
    shrewd-basic 的域分配法,**无需改动 shrewd-basic**;若要在它那边登记,另议。
-3. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
+2. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
    tab 高亮是它的一个绑定;需要一个 target 或留给应用自己写。

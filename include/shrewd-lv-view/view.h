@@ -245,6 +245,27 @@ int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
                                  shrewd_lv_view_nav_pred_fn pred,
                                  void *ctx);
 
+/**
+ * 压栈并清掉中间若干层(architecture.md §6.6,对齐 Flutter `pushAndRemoveUntil`)。
+ *
+ * 把 @p page 压成新栈顶(**产生历史**),再从它下面一层往下,谓词**不命中**的
+ * 逐个清掉,第一个**命中**的留下(连同它以下全部)。
+ *
+ * @code
+ *   [home, w1, w2, w3] -- remove_until(&done, NULL, is_home, ...) --> [home, done]
+ * @endcode
+ *
+ * 典型:登录 / 向导结束直达 home,流程页一层不留 —— home 不在栈里时
+ * `pop_until` 做不到,这个能。
+ *
+ * @param pred  NULL 表示恒不命中:锚点以下全清,栈里只剩 @p page。
+ */
+int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *nav,
+                                    shrewd_lv_view_page_t *page,
+                                    const void *params,
+                                    shrewd_lv_view_nav_pred_fn pred,
+                                    void *ctx);
+
 /** 同级跳转:不产生历史。作用在当前栈。 */
 int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
                                shrewd_lv_view_page_t *page,
