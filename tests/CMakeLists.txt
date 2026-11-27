@@ -107,4 +107,16 @@ target_link_libraries(shrewd-lv-view-bridge
 
 add_test(NAME shrewd-lv-view.bridge COMMAND shrewd-lv-view-bridge)
 
+# 壳的单测(architecture.md §6.9)。
+add_executable(shrewd-lv-view-shell
+        test_shell.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-shell
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.shell COMMAND shrewd-lv-view-shell)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

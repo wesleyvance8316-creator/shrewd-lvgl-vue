@@ -184,6 +184,15 @@ typedef struct shrewd_lv_view_nav {
     size_t branch_count;
     size_t current;
     shrewd_lv_view_nav_stack_t modal;
+
+    /**
+     * **可绑定的导航状态**(architecture.md §6.4):壳的 UI 是这些 ref 的绑定 ——
+     * 标题栏显当前页名、底栏高亮当前 tab,不用手动同步。框架在导航时更新它们。
+     */
+    shrewd_basic_reflect_ref_t current_name;
+    char current_name_buf[64];
+    shrewd_basic_reflect_ref_t current_branch;
+    uint32_t current_branch_val;
 } shrewd_lv_view_nav_t;
 
 /**
@@ -308,6 +317,33 @@ int shrewd_lv_view_app_step(shrewd_lv_view_app_t *app);
 
 /** 给 app_step 一个桥:此后每 tick 都会 drain 它。 */
 void shrewd_lv_view_app_set_bridge(shrewd_lv_view_app_t *app, shrewd_lv_view_bridge_t *bridge);
+
+/*
+ * ==========================================================================
+ * 壳(architecture.md §6.9)
+ * ==========================================================================
+ *
+ * 标题栏 + 底栏是**持久层**:不进页面栈、一直活着。页面渲染在中间的内容区。
+ * 壳的 UI 是**导航状态的绑定** —— 标题栏显当前页名、底栏高亮当前 tab,全是绑定。
+ */
+
+typedef struct shrewd_lv_view_shell {
+    lv_obj_t *root;
+    lv_obj_t *header;
+    lv_obj_t *title;   /**< 标题栏的文本,绑 nav->current_name */
+    lv_obj_t *content; /**< 页面容器 = nav->host */
+    lv_obj_t *footer;
+} shrewd_lv_view_shell_t;
+
+/**
+ * 建壳并接上导航:@p nav 的 host 指到壳的内容区,标题绑上当前页名。
+ * @p footer_height 0 表示不要底栏。
+ */
+int shrewd_lv_view_shell_create(shrewd_lv_view_shell_t *shell,
+                                lv_display_t *display,
+                                shrewd_lv_view_nav_t *nav,
+                                int32_t header_height,
+                                int32_t footer_height);
 
 /*
  * ==========================================================================

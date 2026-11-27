@@ -37,11 +37,19 @@ int main(void) {
     lv_init();
     lv_display_t *disp = lv_display_create(480, 320);
     lv_display_set_flush_cb(disp, disp_flush);
+    (void)disp;
     static lv_color_t buf[480 * 10];
     lv_display_set_buffers(disp, buf, NULL, sizeof(buf), LV_DISPLAY_RENDER_MODE_PARTIAL);
 
     shrewd_lv_view_app_t app;
     if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_app_init(&app, disp)) {
+        return 1;
+    }
+
+    /* 2.5 壳:标题栏 + 底栏 + 内容区(architecture.md §6.9)。
+     *     标题栏显当前页名 —— 是 nav 状态的绑定,不是手动同步。 */
+    static shrewd_lv_view_shell_t shell;
+    if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_shell_create(&shell, disp, &app.nav, 32, 24)) {
         return 1;
     }
 

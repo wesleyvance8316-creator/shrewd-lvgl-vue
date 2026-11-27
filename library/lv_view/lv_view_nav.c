@@ -198,6 +198,9 @@ static int params_copy(const shrewd_lv_view_page_desc_t *desc,
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
+/** 导航后刷新可绑定的导航状态(定义在 nav_init 之后)。 */
+static void nav_publish(shrewd_lv_view_nav_t *nav);
+
 /** 往栈里压一条并激活它(旧栈顶先失活)。 */
 static int stack_push(shrewd_lv_view_nav_t *nav,
                       shrewd_lv_view_nav_stack_t *stack,
@@ -225,7 +228,9 @@ static int stack_push(shrewd_lv_view_nav_t *nav,
         entry_deactivate(prev);
     }
     stack->count += 1;
-    return entry_activate(host, e);
+    status = entry_activate(host, e);
+    nav_publish(nav);
+    return status;
 }
 
 /* --- 生命周期 -------------------------------------------------------- */
@@ -244,7 +249,27 @@ int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav,
     nav->next_seq = 1;
     nav->branch_count = 1;
     nav->current = 0;
+    /* 可绑定的导航状态(§6.4):壳的 UI 是它们的绑定。 */
+    (void)shrewd_basic_reflect_ref_init(
+        &nav->current_name, nav->current_name_buf, sizeof(nav->current_name_buf));
+    (void)shrewd_basic_reflect_ref_init(
+        &nav->current_branch, &nav->current_branch_val, sizeof(nav->current_branch_val));
     return SHREWD_LV_VIEW_ERR_OK;
+}
+
+/** 导航后刷新可绑定的导航状态(标题栏、底栏靠它自动跟)。 */
+static void nav_publish(shrewd_lv_view_nav_t *nav) {
+    shrewd_lv_view_page_t *top = shrewd_lv_view_nav_top(nav);
+    const char *name = ((NULL != top) && (NULL != top->desc) && (NULL != top->desc->name))
+                           ? top->desc->name
+                           : "";
+    (void)memset(nav->current_name_buf, 0, sizeof(nav->current_name_buf));
+    (void)strncpy(nav->current_name_buf, name, sizeof(nav->current_name_buf) - 1);
+    (void)shrewd_basic_reflect_ref_set(
+        &nav->current_name, nav->current_name_buf, sizeof(nav->current_name_buf));
+    nav->current_branch_val = (uint32_t)nav->current;
+    (void)shrewd_basic_reflect_ref_set(
+        &nav->current_branch, &nav->current_branch_val, sizeof(nav->current_branch_val));
 }
 
 void shrewd_lv_view_nav_dispose(shrewd_lv_view_nav_t *nav) {
@@ -357,7 +382,9 @@ int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *nav, size_t branch) {
         entry_deactivate(old);
     }
     shrewd_lv_view_nav_entry_t *now = stack_top(&nav->branches[nav->current]);
-    return (NULL != now) ? entry_activate(nav->host, now) : SHREWD_LV_VIEW_ERR_OK;
+    int status = (NULL != now) ? entry_activate(nav->host, now) : SHREWD_LV_VIEW_ERR_OK;
+    nav_publish(nav);
+    return status;
 }
 
 int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
@@ -435,7 +462,9 @@ int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *nav) {
     entry_free_params(top);
     stack->count -= 1;
     shrewd_lv_view_nav_entry_t *now = stack_top(stack);
-    return (NULL != now) ? entry_activate(nav_active_host(nav), now) : SHREWD_LV_VIEW_ERR_OK;
+    int status = (NULL != now) ? entry_activate(nav_active_host(nav), now) : SHREWD_LV_VIEW_ERR_OK;
+    nav_publish(nav);
+    return status;
 }
 
 int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
@@ -505,6 +534,7 @@ int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
         return status;
     }
     status = entry_activate(nav_active_host(nav), top);
+    nav_publish(nav);
     enforce_cache(nav);
     return status;
 }

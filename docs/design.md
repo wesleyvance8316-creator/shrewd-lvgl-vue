@@ -901,8 +901,8 @@ C9 facade(三档)。
 导航条目与操作集、守卫(全局一个、四种结果)、栈恢复。
 
 **列表数据源**(§10)也已落定:`source` ref 槽位 = `shrewd_lv_view_list_t`,
-`item_ctx` 不需要(`build` 返回子项 root、`teardown` 可选),**两种变化走两个机制**
-(内容变化走反应式 / 结构变化走对账),`build` 只跑一次。
+**两种变化走两个机制**(内容变化走反应式 / 结构变化走对账),`build` 只跑一次。
+子项实例由框架按 `desc->instance_size` 分配并释放(§14.1 摩擦点 1 已修)。
 
 **构建配置落地**也已完成:`config/lv_conf.h`(最小配置,只写差异)+
 `tools/build-deps.sh --lv-conf`,开 `LV_USE_PRIVATE_API` + `LV_USE_OBJ_PROPERTY`,
@@ -916,8 +916,14 @@ C9 facade(三档)。
 否则模板引用的 API 不存在、生成的项目编不过,"开箱即用"就落空。`app_mount`
 现在只做 create + enter,**导航栈是 M2 的活**。
 
+**壳**(architecture.md §6.9)也已实现:`shrewd_lv_view_shell_create` 建标题栏 +
+内容区 + 底栏,`nav->host` 指到内容区;**标题栏显当前页名是 nav 状态的绑定**,
+导航变了自动跟,不手动同步。
+
 **下一步(不是待决,是未做)**:
 
-1. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,
-   不占用 shrewd-basic 的域分配法,**无需改动 shrewd-basic**。
-2. **M2 的实现**:§14 的里程碑切分(绑定层 + 页面管理的导航栈)。
+1. **`remove_until`** —— `pop_until` 的变体,加个锚点。
+2. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,不占用
+   shrewd-basic 的域分配法,**无需改动 shrewd-basic**;若要在它那边登记,另议。
+3. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
+   tab 高亮是它的一个绑定;需要一个 target 或留给应用自己写。
