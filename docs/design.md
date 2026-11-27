@@ -843,6 +843,35 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 6. 跨线程桥与 sb_dbus 合流
 7. 真实页面原型倒推 API 手感(立项文档里程碑 3)
 
+### 14.1 原型倒推:API 手感(里程碑 3 第 7 项)
+
+`examples/prototype/` 是一个**真跑起来**的页面原型:数据模型(stores/)、组件
+(device_card)、三个页面(home 列表 / detail v-model / settings 文本)、数据源线程、
+跨线程桥、导航(push/pop)。200 tick 跑完、退出码 0。
+
+写它的过程暴露了下面这些**摩擦点**。这是这一项的交付物 —— 不是代码。
+
+#### 摩擦点(按影响排序)
+
+| # | 摩擦 | 现状 | 建议 |
+|---|---|---|---|
+| **1** | **列表子项的组件实例没有归属** | §10.3 说"`item_ctx` 不需要",但**真组件有实例结构**,而子项是动态的、调用方无法预先持有。原型里只好自己 `calloc` card、塞进 `lv_obj_set_user_data`、teardown 再取回释放 | 给子项一个**归属槽**(`desc->instance_size`),框架分配并传给 `build` —— 照 `lv_fragment` 的形态 |
+| **2** | **框架不提供 tick 源** | 真实应用必须自己写 `lv_tick_set_cb`;没写则 `lv_tick_get()` 恒 0、`lv_timer_handler` 里定时器永不推进 | `app_init` 内置一个默认 tick(可被覆盖) |
+| **3** | **display 必须有 flush 回调** | 没有它 `lv_timer_handler()` **转不出来**(实测挂死在第 0 个 tick)。手写 `main.c` 时最容易漏 | 脚手架已有;原型手写时踩了。文档记一笔 |
+| **4** | **include 路径约定** | 一目录一组件 → `views/views.h`、`components/device_card/device_card.h`,手写容易忘 | 统一约定写进 §9.4 |
+
+#### 顺手的地方(不用改)
+
+- **组件形态**直白:状态 struct + 创建/销毁,一眼看懂;
+- **绑定 API** 一行一个:`shrewd_lv_view_bind_label_text(label, &d->name)`;
+- **导航 API** 清楚:`nav_push(&app.nav, &detail.base, &id)`;
+- **桥** 的 `post` / `drain` 边界清楚,数据源线程里一眼看出该用哪个。
+
+#### 一个跨线程的确认
+
+数据源线程**只能 `post` 不能 `ref_set`** —— 原型里那行注释就是铁律的落地形态,
+写起来不需要额外思考,这条设计是成立的。
+
 ## 15. 已决汇总与下一步
 
 D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
