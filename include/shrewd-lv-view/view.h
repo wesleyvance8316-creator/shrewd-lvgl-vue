@@ -158,6 +158,11 @@ typedef struct shrewd_lv_view_nav {
     uint32_t next_seq;
     shrewd_lv_view_guard_fn guard;
     void *guard_ctx;
+    /* 页面登记表:name -> 实例。**只服务于恢复**(§8.6 按 name 找回实例),
+       所以要恢复的页面必须先登记;push 会顺带登记。 */
+    shrewd_lv_view_page_t **registry;
+    size_t registry_count;
+    size_t registry_capacity;
 } shrewd_lv_view_nav_t;
 
 /** 初始化导航栈,@p host 是页面容器。@p limit 0 表示用默认上限。 */
@@ -192,6 +197,30 @@ int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
 shrewd_lv_view_page_t *shrewd_lv_view_nav_top(shrewd_lv_view_nav_t *nav);
 
 size_t shrewd_lv_view_nav_depth(const shrewd_lv_view_nav_t *nav);
+
+/**
+ * 登记页面,让 `name -> 实例` 可查。**恢复要用** —— 快照里只有 name,
+ * 必须能找回实例。push 会顺带登记;启动时把所有可恢复的页面登记一次即可。
+ */
+int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *nav, shrewd_lv_view_page_t *page);
+
+/**
+ * 栈快照(§8.6):把所有条目的 `name + params` 交给调用方。
+ * **「存到哪」归使用者**(flash / 文件 / shm),框架只产出有效快照。
+ *
+ * 用法:先 `nav_save_size` 拿长度,再 `nav_save` 写进自己准备的缓冲。
+ */
+int shrewd_lv_view_nav_save_size(const shrewd_lv_view_nav_t *nav, size_t *out_size);
+
+/** 把快照写进 @p buf(@p size 由 nav_save_size 给出)。 */
+int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *nav, void *buf, size_t size);
+
+/**
+ * 从快照重建栈:靠 `name` 在登记表里找回实例,按序重建条目,**只激活栈顶**
+ * (其余条目是描述,等回退到它们时才建 widget —— 与释放策略一致)。
+ * 当前栈会被先清空(逐个 exit + 按策略销毁)。
+ */
+int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_t size);
 
 #define SHREWD_LV_VIEW_MAX_PLUGINS 8
 

@@ -59,4 +59,16 @@ target_link_libraries(shrewd-lv-view-nav
 
 add_test(NAME shrewd-lv-view.nav COMMAND shrewd-lv-view-nav)
 
+# 栈恢复的单测:快照往返、未知页面、坏快照(design.md §8.6)。
+add_executable(shrewd-lv-view-restore
+        test_restore.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-restore
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.restore COMMAND shrewd-lv-view-restore)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

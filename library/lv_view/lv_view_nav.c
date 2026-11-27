@@ -236,6 +236,8 @@ int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
     if (SHREWD_LV_VIEW_ERR_OK != status) {
         return status;
     }
+    /* push 顺带登记:让 name -> 实例 可查,恢复就不用额外记账。 */
+    (void)shrewd_lv_view_nav_register(nav, page);
     shrewd_lv_view_nav_entry_t *prev = nav_top_entry(nav);
     if (NULL != prev) {
         entry_deactivate(prev);
@@ -353,4 +355,197 @@ int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
     status = entry_activate(nav, top);
     enforce_cache(nav);
     return status;
+}
+
+/* --- 页面登记表:name -> 实例(只服务恢复,§8.6)-------------------- */
+
+int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *nav, shrewd_lv_view_page_t *page) {
+    if ((NULL == nav) || (NULL == page) || (NULL == page->desc) || (NULL == page->desc->name)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    for (size_t i = 0; i < nav->registry_count; ++i) {
+        if (nav->registry[i] == page) {
+            return SHREWD_LV_VIEW_ERR_OK; /* 幂等 */
+        }
+    }
+    if (nav->registry_count >= nav->registry_capacity) {
+        size_t cap = (0 == nav->registry_capacity) ? NAV_MIN_CAPACITY : nav->registry_capacity * 2;
+        void *slot = NULL;
+        if (SHREWD_BASIC_ERR_OK
+            != shrewd_basic_platform_realloc(&slot, nav->registry, cap * sizeof(*nav->registry))) {
+            return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        }
+        nav->registry = (shrewd_lv_view_page_t **)slot;
+        nav->registry_capacity = cap;
+    }
+    nav->registry[nav->registry_count] = page;
+    nav->registry_count += 1;
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+static shrewd_lv_view_page_t *nav_find_by_name(shrewd_lv_view_nav_t *nav, const char *name) {
+    for (size_t i = 0; i < nav->registry_count; ++i) {
+        if ((NULL != nav->registry[i]->desc) && (NULL != nav->registry[i]->desc->name)
+            && (0 == strcmp(nav->registry[i]->desc->name, name))) {
+            return nav->registry[i];
+        }
+    }
+    return NULL;
+}
+
+/* --- 栈快照(§8.6)-------------------------------------------------
+ *
+ * 小端显式,不依赖宿主字节序:
+ *   u32 magic 'SLVN' | u32 version | u32 count
+ *   每条: u32 seq | u32 name_len | u32 params_size | name | params
+ */
+
+#define NAV_SNAPSHOT_MAGIC 0x4E564C53u
+#define NAV_SNAPSHOT_VERSION 1u
+
+static void put_u32(unsigned char *p, uint32_t v) {
+    p[0] = (unsigned char)(v & 0xffu);
+    p[1] = (unsigned char)((v >> 8) & 0xffu);
+    p[2] = (unsigned char)((v >> 16) & 0xffu);
+    p[3] = (unsigned char)((v >> 24) & 0xffu);
+}
+
+static uint32_t get_u32(const unsigned char *p) {
+    return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16)
+           | ((uint32_t)p[3] << 24);
+}
+
+int shrewd_lv_view_nav_save_size(const shrewd_lv_view_nav_t *nav, size_t *out_size) {
+    if ((NULL == nav) || (NULL == out_size)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    size_t total = 12; /* magic + version + count */
+    for (size_t i = 0; i < nav->count; ++i) {
+        const shrewd_lv_view_page_desc_t *desc = nav->entries[i].page->desc;
+        size_t name_len = (NULL != desc->name) ? strlen(desc->name) : 0;
+        total += 12 + name_len + nav->entries[i].params_size;
+    }
+    *out_size = total;
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *nav, void *buf, size_t size) {
+    if ((NULL == nav) || (NULL == buf)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    size_t need = 0;
+    if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_nav_save_size(nav, &need)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (size < need) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    unsigned char *out = (unsigned char *)buf;
+    put_u32(out, NAV_SNAPSHOT_MAGIC);
+    put_u32(out + 4, NAV_SNAPSHOT_VERSION);
+    put_u32(out + 8, (uint32_t)nav->count);
+    out += 12;
+    for (size_t i = 0; i < nav->count; ++i) {
+        const shrewd_lv_view_nav_entry_t *e = &nav->entries[i];
+        const char *name = e->page->desc->name;
+        uint32_t name_len = (uint32_t)((NULL != name) ? strlen(name) : 0);
+        put_u32(out, e->seq);
+        put_u32(out + 4, name_len);
+        put_u32(out + 8, (uint32_t)e->params_size);
+        out += 12;
+        if (0 != name_len) {
+            memcpy(out, name, name_len);
+            out += name_len;
+        }
+        if (0 != e->params_size) {
+            memcpy(out, e->params, e->params_size);
+            out += e->params_size;
+        }
+    }
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+/** 清空栈:逐个失活 + 按策略销毁 + 释放参数副本。 */
+static void nav_clear(shrewd_lv_view_nav_t *nav) {
+    while (0 < nav->count) {
+        shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
+        entry_deactivate(top);
+        if (NULL != top->params) {
+            void *p = top->params;
+            (void)shrewd_basic_platform_free(&p);
+        }
+        nav->count -= 1;
+    }
+}
+
+int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_t size) {
+    if ((NULL == nav) || (NULL == buf) || (12 > size)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    const unsigned char *in = (const unsigned char *)buf;
+    if (NAV_SNAPSHOT_MAGIC != get_u32(in)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (NAV_SNAPSHOT_VERSION != get_u32(in + 4)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    uint32_t count = get_u32(in + 8);
+    in += 12;
+    size_t left = size - 12;
+    if ((uint32_t)nav->limit < count) {
+        return SHREWD_LV_VIEW_ERR_NAV_STACK_FULL;
+    }
+    nav_clear(nav);
+    if (SHREWD_LV_VIEW_ERR_OK != nav_reserve(nav, (size_t)count)) {
+        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (12 > left) {
+            return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+        }
+        uint32_t seq = get_u32(in);
+        uint32_t name_len = get_u32(in + 4);
+        uint32_t params_size = get_u32(in + 8);
+        in += 12;
+        left -= 12;
+        if ((size_t)name_len + (size_t)params_size > left) {
+            return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+        }
+        char name[128];
+        if (name_len >= sizeof(name)) {
+            return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+        }
+        memcpy(name, in, name_len);
+        name[name_len] = '\0';
+        in += name_len;
+        left -= name_len;
+
+        shrewd_lv_view_page_t *page = nav_find_by_name(nav, name);
+        if (NULL == page) {
+            return SHREWD_LV_VIEW_ERR_NOT_FOUND;
+        }
+        shrewd_lv_view_nav_entry_t *e = &nav->entries[nav->count];
+        memset(e, 0, sizeof(*e));
+        e->page = page;
+        e->seq = seq;
+        e->entered_at = (uint64_t)lv_tick_get();
+        if (0 != params_size) {
+            void *slot = NULL;
+            if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&slot, params_size)) {
+                return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+            }
+            memcpy(slot, in, params_size);
+            e->params = slot;
+            e->params_size = params_size;
+        }
+        in += params_size;
+        left -= params_size;
+        nav->count += 1;
+        if (nav->next_seq <= seq) {
+            nav->next_seq = seq + 1;
+        }
+    }
+    /* 只激活栈顶:其余是描述,回退到它们时才建 widget(与释放策略一致)。 */
+    shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
+    return (NULL != top) ? entry_activate(nav, top) : SHREWD_LV_VIEW_ERR_OK;
 }
