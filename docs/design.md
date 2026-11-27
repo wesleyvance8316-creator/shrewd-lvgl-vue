@@ -531,13 +531,22 @@ void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *, shrewd_lv_view_guard_f
 ### 8.6 栈恢复
 
 ```c
-int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *, shrewd_lv_view_save_fn, void *ctx);
-int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *, shrewd_lv_view_load_fn, void *ctx);
+int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page);
+int shrewd_lv_view_nav_save_size(const shrewd_lv_view_nav_t *, size_t *out_size);
+int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *, void *buf, size_t size);
+int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *, const void *buf, size_t size);
 ```
 
-保存的是**所有分支 + 模态栈的条目**(`desc->name` + params);恢复时靠 `name` 找回页面、
-按序重建、四阶段钩子按序调用。**「存到哪」归使用者**(architecture.md 6.11 Q3),
-框架负责产出有效快照、判定何时该存。
+保存的是条目的 `desc->name` + params;恢复时靠 `name` 找回页面、按序重建,**只激活栈顶**
+(其余是描述,回退到它们时才建 widget —— 与释放策略一致)。**「存到哪」归使用者**
+(architecture.md 6.11 Q3),框架负责产出有效快照。
+
+**登记表**:`name -> 实例` 只服务于恢复(快照里只有 name,必须能找回实例)。
+`push` 顺带登记;**启动时把可恢复的页面登记一次即可**,否则恢复会 `NOT_FOUND`。
+
+> **实现修正**:原稿是 `save_fn` / `load_fn` 回调。**回调形式让调用方不知道要读多少**,
+> 而且多一层分配归属问题。改为 `save_size` + `save` + `restore` 三个缓冲接口 ——
+> 调用方查询长度、自己准备缓冲、自己决定写到哪,无歧义。
 
 ## 9. 项目形态与脚手架
 
