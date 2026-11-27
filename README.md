@@ -10,7 +10,11 @@ on embedded Linux LVGL; the data plane is
 (macros `SHREWD_LV_VIEW_*`), matching shrewd-basic's `shrewd_basic_*`
 house style; consumers include only `shrewd-lv-view/view.h`.
 
-- Design & charter: [docs/initiation.md](docs/initiation.md)
+- **Start here**: [docs/guide.md](docs/guide.md) (tutorial) ·
+  [docs/api.md](docs/api.md) (API overview)
+- Design & charter: [docs/initiation.md](docs/initiation.md) ·
+  [docs/architecture.md](docs/architecture.md) (model) ·
+  [docs/design.md](docs/design.md) (decisions)
 - Build:
 
   ```
@@ -30,4 +34,10 @@ house style; consumers include only `shrewd-lv-view/view.h`.
 - Style: clang-format / clang-tidy gates, same conventions as shrewd-basic
   (`tools/check-style.sh`, pre-commit hooks: `git config core.hooksPath .githooks`).
 
-Status: **0.1.0 skeleton** - API free to change.
+Status: **0.1.0, pre-1.0** - API free to change. Working: reactive bindings
+(v-model, loop suppression), page navigation (stack, `pop_until` /
+`remove_until`, branches, modal, guards, power-loss restore), list
+reconciliation, cross-thread bridge + sb_dbus, shell (header + tab bar),
+component ecosystem (fragments + widgets + a packaged component library),
+scaffold, and a running prototype. See [docs/guide.md](docs/guide.md) §10
+for the pitfalls worth knowing first.
