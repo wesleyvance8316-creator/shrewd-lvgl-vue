@@ -83,4 +83,16 @@ target_link_libraries(shrewd-lv-view-branch
 
 add_test(NAME shrewd-lv-view.branch COMMAND shrewd-lv-view-branch)
 
+# 列表对账的单测(design.md §10)。
+add_executable(shrewd-lv-view-list
+        test_list.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-list
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.list COMMAND shrewd-lv-view-list)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

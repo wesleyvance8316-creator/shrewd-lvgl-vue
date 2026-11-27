@@ -347,6 +347,53 @@ int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *
 int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
 
 /*
+ * ==========================================================================
+ * 列表与条件渲染:对账原语(design.md §10)
+ * ==========================================================================
+ *
+ * **两种变化走两个机制**:
+ *   - 内容变化(某个子项的字段变了)→ 反应式:item 里的 ref;
+ *   - 结构变化(增删 / 重排)     → 对账:source ref。
+ *
+ * 所以 `build` **只跑一次** —— 若让它重跑会再挂一套绑定(泄漏)。内容要变,
+ * 就得是 item 里的 ref。
+ */
+
+/** ref 槽位类型:列表本身(design.md §10.2)。 */
+typedef struct shrewd_lv_view_list {
+    const void *items; /**< 连续数组;抽象源为 NULL */
+    uint32_t count;
+} shrewd_lv_view_list_t;
+
+/** 数据源 + 子项描述(design.md §10.3)。 */
+typedef struct shrewd_lv_view_list_desc {
+    /** 取第 i 项数据。为 NULL 时用 `items + i * item_size`。 */
+    const void *(*at)(void *ctx, uint32_t i);
+    /** 稳定标识,必需(对账靠它)。 */
+    uint32_t (*key)(void *ctx, uint32_t i);
+    size_t item_size;
+
+    /** 建子项,返回它的 root widget。**只跑一次**。 */
+    lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item);
+    /** 拆子项,可选(NULL = 就删 widget,绑定按 design.md §3 自清)。 */
+    void (*teardown)(void *ctx, lv_obj_t *root, const void *item);
+} shrewd_lv_view_list_desc_t;
+
+/**
+ * 把 @p source(槽位是 shrewd_lv_view_list_t)接到 @p container 上。
+ *
+ * 契约(design.md §10.5):
+ *   - `at(i)` 返回的指针在子项存活期间必须**稳定**;
+ *   - 子项的数据结构里要含 ref,否则内容变化反映不出来。
+ *
+ * 容器**只放列表子项**(顺序按 index 对齐)。
+ */
+int shrewd_lv_view_bind_list(lv_obj_t *container,
+                             shrewd_basic_reflect_ref_t *source,
+                             const shrewd_lv_view_list_desc_t *desc,
+                             void *ctx);
+
+/*
  * The binding layer lands here (docs/initiation.md milestone 2): text /
  * range / v-model bindings and the component lifecycle. The reactive
  * core is not duplicated in this facade - it lives in shrewd-basic

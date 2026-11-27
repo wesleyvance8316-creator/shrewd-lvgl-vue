@@ -710,14 +710,17 @@ typedef struct {
 ```c
 typedef struct {
     /* 数据访问:at 为 NULL 时用 items + item_size 推导 */
-    const void *(*at)(const void *ctx, uint32_t i);
-    uint32_t (*key)(const void *ctx, uint32_t i);   /* 稳定标识,必需 */
+    const void *(*at)(void *ctx, uint32_t i);
+    uint32_t (*key)(void *ctx, uint32_t i);   /* 稳定标识,必需 */
     size_t item_size;
 
     /* 子项 */
     lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item);
     void (*teardown)(void *ctx, lv_obj_t *root, const void *item);   /* 可选 */
 } shrewd_lv_view_list_desc_t;
+
+> **实现修正**:`at`/`key` 的 `ctx` 原稿是 `const void *`,与 `build`/`teardown` 的
+> `void *` 不一致 —— 调用方同一份 ctx 要来回强制转换。**统一为 `void *`**。
 
 int shrewd_lv_view_bind_list(lv_obj_t *container,
                              shrewd_basic_reflect_ref_t *source,
