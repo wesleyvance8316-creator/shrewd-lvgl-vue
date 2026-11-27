@@ -65,6 +65,7 @@ const char *shrewd_lv_view_error_name(int code);
  */
 
 struct shrewd_lv_view_app; /* 前置声明:否则下面参数表里的 struct 声明是局部的 */
+typedef struct shrewd_lv_view_bridge shrewd_lv_view_bridge_t; /* 前置:app 要持有它 */
 
 /** A component library's registration entry (docs/design.md §7.7). */
 typedef struct shrewd_lv_view_plugin {
@@ -278,8 +279,9 @@ int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_
 /** Application: page host + configuration + plugins. */
 typedef struct shrewd_lv_view_app {
     lv_display_t *display;
-    lv_obj_t *host;           /**< page container (M2: shell content area) */
-    shrewd_lv_view_nav_t nav; /**< 导航栈 */
+    lv_obj_t *host;                  /**< page container (M2: shell content area) */
+    shrewd_lv_view_nav_t nav;        /**< 导航栈 */
+    shrewd_lv_view_bridge_t *bridge; /**< 可选:每 tick drain 它 */
     const shrewd_lv_view_plugin_t *plugins[SHREWD_LV_VIEW_MAX_PLUGINS];
     size_t plugin_count;
 } shrewd_lv_view_app_t;
@@ -303,6 +305,9 @@ int shrewd_lv_view_app_mount(shrewd_lv_view_app_t *app,
  * drive lv_timer_handler(). Call it from wherever the loop lives.
  */
 int shrewd_lv_view_app_step(shrewd_lv_view_app_t *app);
+
+/** 给 app_step 一个桥:此后每 tick 都会 drain 它。 */
+void shrewd_lv_view_app_set_bridge(shrewd_lv_view_app_t *app, shrewd_lv_view_bridge_t *bridge);
 
 /*
  * ==========================================================================
@@ -392,6 +397,72 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
                              shrewd_basic_reflect_ref_t *source,
                              const shrewd_lv_view_list_desc_t *desc,
                              void *ctx);
+
+/*
+ * ==========================================================================
+ * 跨线程桥(design.md §11)
+ * ==========================================================================
+ *
+ * **铁律:所有 `ref_set` 必须发生在跑 `lv_timer_handler()` 的那个线程。**
+ * 因为 `ref_set` 会同步重跑 effect,而 effect 里是 `lv_*` 调用 —— 在别的线程写
+ * ref = 在别的线程碰 UI 树 = 未定义行为。
+ *
+ * 桥的全部职责就是**把数据从别的线程送到这个线程**,不藏线程:
+ *
+ *     数据侧(任意线程):  post()  快照入队
+ *     UI 线程(app_step): drain()  一次性出队全部 → 逐个 ref_set
+ *
+ * 批量是关键:50 个字段变化不该唤醒 UI 线程 50 次。一次 drain 吃掉整队,
+ * 由 effect 去重、LVGL 合并重绘。
+ */
+
+#include "shrewd-basic/dbus/dbus.h"
+
+/**
+ * 桥。`state` 是私有的(队列 + 锁),由 init 分配 —— 不把 pthread 漏进公共头,
+ * 与 shrewd-basic 的做法一致。
+ */
+struct shrewd_lv_view_bridge {
+    void *state;
+};
+
+int shrewd_lv_view_bridge_init(shrewd_lv_view_bridge_t *b);
+void shrewd_lv_view_bridge_dispose(shrewd_lv_view_bridge_t *b);
+
+/**
+ * 入队一份快照。**任意线程可调**;@p value 被拷贝,调用方随后可释放。
+ * @p size 必须与 @p ref 的宽度一致。
+ */
+int shrewd_lv_view_bridge_post(shrewd_lv_view_bridge_t *b,
+                               shrewd_basic_reflect_ref_t *ref,
+                               const void *value,
+                               size_t size);
+
+/**
+ * 出队并逐个 `ref_set`。**只能在 UI 线程调** —— 由 `shrewd_lv_view_app_step()`
+ * 在每个 tick 里戳它。
+ */
+int shrewd_lv_view_bridge_drain(shrewd_lv_view_bridge_t *b);
+
+/** sb_dbus 绑定的上下文:**调用方内嵌,须活过订阅**(家法:不隐藏分配)。 */
+typedef struct shrewd_lv_view_dbus_bind {
+    shrewd_lv_view_bridge_t *bridge;
+    shrewd_basic_reflect_ref_t *ref;
+} shrewd_lv_view_dbus_bind_t;
+
+/**
+ * 合流:把一个 sb_dbus 节点接到 ref 上。节点变化时(回调跑在 sb_dbus 的
+ * **分发线程**,即"数据侧")→ 快照入队 → UI 线程 drain → `ref_set`。
+ *
+ * @p bind 由调用方持有(填好 bridge/ref 两个字段);@p handle 收回订阅句柄,
+ * 交给 `shrewd_basic_dbus_unsubscribe` 退订。
+ */
+int shrewd_lv_view_bridge_bind_dbus(shrewd_lv_view_bridge_t *b,
+                                    shrewd_basic_dbus_t *bus,
+                                    const char *pattern,
+                                    shrewd_basic_reflect_ref_t *ref,
+                                    shrewd_lv_view_dbus_bind_t *bind,
+                                    shrewd_basic_dbus_handle_t **handle);
 
 /*
  * The binding layer lands here (docs/initiation.md milestone 2): text /

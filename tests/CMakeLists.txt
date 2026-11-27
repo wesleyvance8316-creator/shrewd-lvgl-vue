@@ -95,4 +95,16 @@ target_link_libraries(shrewd-lv-view-list
 
 add_test(NAME shrewd-lv-view.list COMMAND shrewd-lv-view-list)
 
+# 跨线程桥的单测(design.md §11):批量、多线程、sb_dbus 合流。
+add_executable(shrewd-lv-view-bridge
+        test_bridge.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-bridge
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.bridge COMMAND shrewd-lv-view-bridge)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

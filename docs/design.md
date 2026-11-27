@@ -780,16 +780,24 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 
 桥的形状:
 
-    recv 线程: 快照入队(带序号/版本)
-    LVGL 线程: lv_timer_handler → 驱动 lv_async_call 回调
-              → 一次性出队全部快照 → 逐个 ref_set
-              → effect 同步推 UI,LVGL 自行合并重绘
+    数据侧(任意线程):   post()  快照入队
+    UI 线程(app_step):  drain() 一次性出队全部 → 逐个 ref_set
+                        → effect 同步推 UI,LVGL 自行合并重绘
 
-批量是关键:50 个字段变化不该唤醒 UI 线程 50 次。一次 dispatch 吃掉整队,由 C2/effect
+> **实现修正(两条)**:
+>
+> 1. **唤醒机制用 `app_step` 轮询,不用 `lv_async_call`**。调用方本来就在主循环里
+>    每 tick 调 `shrewd_lv_view_app_step()`,轮询天然存在;`lv_async_call` 只在
+>    追求"入队即刻唤醒"的低延迟场景才需要,而那要多一层线程唤醒。轮询把批量
+>    变成结构保证 —— 一次 drain 整队吃掉。
+> 2. **快照不带序号/版本**。队列是 FIFO、drain 全量应用、`ref_set` 覆盖写,所以
+>    不会丢也不会乱序;同 ref 连投两次是"后者胜",正是想要的语义。序号/版本是
+>    给"可能丢包"的通道用的,这里不需要。
+
+批量是关键:50 个字段变化不该唤醒 UI 线程 50 次。一次 drain 吃掉整队,由 C2/effect
 去重,由 LVGL 合并重绘。
 
-桥放在**本仓**(立项文档:"桥是唯一引用 LVGL API 的层,必须留在本仓库"),但**不进
-里程碑 2**——先有能单测的绑定层,再谈总线合流。
+桥放在**本仓**(立项文档:"桥是唯一引用 LVGL API 的层,必须留在本仓库")。
 
 ## 12. 约定
 

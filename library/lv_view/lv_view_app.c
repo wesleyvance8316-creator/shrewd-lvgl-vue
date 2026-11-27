@@ -94,11 +94,20 @@ int shrewd_lv_view_app_mount(shrewd_lv_view_app_t *app,
     return shrewd_lv_view_nav_push(&app->nav, page, params);
 }
 
+void shrewd_lv_view_app_set_bridge(shrewd_lv_view_app_t *app, shrewd_lv_view_bridge_t *bridge) {
+    if (NULL != app) {
+        app->bridge = bridge;
+    }
+}
+
 int shrewd_lv_view_app_step(shrewd_lv_view_app_t *app) {
     if (NULL == app) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
-    /* M2 drains cross-thread deliveries here (docs/design.md §11). */
+    /* 跨线程投递在这一步落地:先出队 ref_set,effect 同步推 UI,再走 LVGL。 */
+    if (NULL != app->bridge) {
+        (void)shrewd_lv_view_bridge_drain(app->bridge);
+    }
     lv_timer_handler();
     return SHREWD_LV_VIEW_ERR_OK;
 }
