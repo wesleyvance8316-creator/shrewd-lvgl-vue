@@ -401,6 +401,18 @@ int mylib_panel_create(mylib_panel_t *p, lv_obj_t *parent,
 打成 CMake 包(`find_package` 导入)——与 shrewd-lv-view 被消费的方式完全一致。
 命名前缀用组件库自己的,不占用 `shrewd_`。
 
+> **已落地**:`examples/component-lib/` 就是这个包 —— **`demo-components`**,前缀
+> `demo_`,内含控件 `demo/gauge`、片段 `demo/card`,自装自测,`examples/prototype`
+> 用 `find_package(demo-components)` 消费它。**§7.2/§7.3 的样板随它搬了过去**,
+> 框架 `tests/` 只留机制单测。
+>
+> **组件库的产出物不止 widget,还有它的绑定胶水**:`demo_bind_gauge_value()`。
+> §6 的扩展规则(一张 target 表 + 一个 3 行便捷函数)**从框架外面用得通**,不用改框架。
+>
+> 只有真打包才撞得到的两点,记在 `examples/component-lib/README.md`:warnings 目标要
+> `$<BUILD_INTERFACE:...>` 包住(静态库会把私有链接依赖记进导出集);**带写回的 target
+> 表不能是 `const`** —— 写回挂的自定义事件 id 是运行时注册的。
+
 ### 7.8 调研依据与被堵死的路
 
 **两条路被调研堵死**(都来自 lvgl 9.6 vendored 源码与官方文档):
@@ -997,15 +1009,21 @@ C9 facade(三档)。
   "谁是当前"(§7.6);
 - **便捷** `shell_add_tab`:建按钮 + 点击切分支 + 高亮跟上,一行一个 tab。
 
-**组件生态**(§7)也已落地,两种产出物树里都有样板:片段 `demo_card`
-(v-model + 槽 + 设计 token)、控件 `demo_gauge`(`lv_obj_class_t` + 属性表 +
-自定义事件)。框架只多了一个类型 `shrewd_lv_view_slot_fn` —— 其余全是约定和 LVGL
-自己的机制,这正是 §7 的立场。**§7.3 的四个坑是写进树里才撞出来的**,已记在该节。
+**组件生态**(§7)也已落地,两种产出物都有样板:片段 `demo/card`(v-model + 槽 +
+设计 token)、控件 `demo/gauge`(`lv_obj_class_t` + 属性表 + 自定义事件)。框架只多
+了一个类型 `shrewd_lv_view_slot_fn` —— 其余全是约定和 LVGL 自己的机制。
+**§7.3 的四个坑是写进树里才撞出来的**,已记在该节。
+
+组件库也**真打成了独立 CMake 包**(§7.7「普通 C 库」):`examples/component-lib/`
+的 **`demo-components`**,前缀 `demo_`,`find_package` 导入,原型就是这么消费的。
+样板随之搬进包里(框架 `tests/` 只留机制单测),还多出**绑定胶水**
+`demo_bind_gauge_value()` —— §6 的扩展规则从框架外面用得通。
 
 **至此 §15 的清单清空。** 已落地:依赖与构建、绑定机制(含 v-model 与回路抑制)、
-组件模型与组件生态、列表对账、跨线程桥 + sb_dbus 合流、导航栈(四阶段/释放策略/
-守卫/`pop_until`/`remove_until`)、栈恢复、分支与模态、壳(标题栏 + 底栏 tab)、
-脚手架、真实页面原型、跨仓约定。**12 个单测全绿。**
+组件模型与组件生态(含独立包)、列表对账、跨线程桥 + sb_dbus 合流、导航栈
+(四阶段/释放策略/守卫/`pop_until`/`remove_until`)、栈恢复、分支与模态、壳
+(标题栏 + 底栏 tab)、脚手架、真实页面原型、跨仓约定。
+**测试:框架 10 + 组件库 2,全绿。**
 
-**再往下是用,不是设计**:组件库真做成独立 CMake 包(§7.7「普通 C 库」的最后一步)、
-真实控件的绘制与主题接入、props 的类型校验 —— 这些要有真实组件需求再动,免得凭空设计。
+**再往下是用,不是设计**:真实控件的绘制与主题接入、props 的类型校验、组件库的
+多包协作(几个组件库互相用)—— 这些要有真实组件需求再动,免得凭空设计。

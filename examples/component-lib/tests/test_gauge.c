@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "demo_gauge.h"
+#include "demo/gauge.h"
 #include "lvgl_fixture.h"
 
 static int g_fail;
@@ -78,6 +78,25 @@ static int32_t demo_gauge_max(lv_obj_t *g) {
     return ((demo_gauge_t *)g)->max;
 }
 
+/* --- 5. 绑定胶水:第三方控件也能接上响应式(§6)----------------------- */
+
+static void test_binding(void) {
+    printf("test_binding\n");
+    lv_obj_t *g = demo_gauge_create(lv_screen_active());
+    int32_t v = 30;
+    shrewd_basic_reflect_ref_t ref;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&ref, &v, sizeof(v)), "ref_init");
+    check(SHREWD_LV_VIEW_ERR_OK == demo_bind_gauge_value(g, &ref), "bind_gauge_value");
+
+    check(30 == demo_gauge_get_value(g), "ref drives the widget on bind");
+    v = 70;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_set(&ref, &v, sizeof(v)), "ref_set");
+    check(70 == demo_gauge_get_value(g), "widget follows the ref");
+
+    demo_gauge_set_value(g, 20);
+    check(20 == v, "widget writes back through the ref");
+}
+
 static void test_instance_size(void) {
     printf("test_instance_size\n");
     /* instance_size 是 16 位位域:太大直接放不下,这是控件作者要知道的约束。 */
@@ -94,6 +113,7 @@ int main(void) {
     test_class_creates_new_type();
     test_props();
     test_custom_event();
+    test_binding();
     test_instance_size();
     if (0 == g_fail) {
         printf("test_widget: ok\n");

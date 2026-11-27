@@ -1,0 +1,12 @@
+@PACKAGE_INIT@
+
+# demo-components 的公开头暴露 lv_obj_t(lvgl)、shrewd_basic_reflect_ref_t
+# (shrewd-basic)和 shrewd_lv_view_* (shrewd-lv-view),所以三个都得交给消费者。
+# 全部预期住在同一个 install prefix,一个 CMAKE_PREFIX_PATH 就能解掉整套。
+include(CMakeFindDependencyMacro)
+find_dependency(shrewd-lv-view)
+find_dependency(lvgl 9.6)
+
+include("${CMAKE_CURRENT_LIST_DIR}/demo-components-targets.cmake")
+
+check_required_components(demo-components)

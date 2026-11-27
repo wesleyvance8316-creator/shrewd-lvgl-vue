@@ -4,7 +4,7 @@
  *
  * 照 lvgl 自己 widget 的写法:类描述符 + 属性表 + 自定义事件 id。
  */
-#include "demo_gauge.h"
+#include "demo/gauge.h"
 
 uint32_t demo_gauge_event_value_changed;
 
@@ -97,6 +97,39 @@ const lv_obj_class_t demo_gauge_class = {
     .theme_inheritable = 1, /* 走 LVGL 主题(§7.6),不自造 */
     LV_PROPERTY_CLASS_FIELDS(gauge, GAUGE),
 };
+
+/* --- 绑定胶水(§6:新增属性 = 一张 target 表 + 一个便捷函数)---------- */
+
+static void gauge_value_write(void *obj, const void *value, size_t size) {
+    if (sizeof(int32_t) == size) {
+        demo_gauge_set_value((lv_obj_t *)obj, *(const int32_t *)value);
+    }
+}
+
+static int gauge_value_read(void *obj, void *out, size_t size) {
+    if (sizeof(int32_t) != size) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    *(int32_t *)out = demo_gauge_get_value((const lv_obj_t *)obj);
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+/*
+ * **这张表不能是 `const`**:写回要挂自定义事件 id,而它是**运行时**
+ * `lv_event_register_id()` 注册的。所以 init 里填,不像 label 那样能写死。
+ */
+static shrewd_lv_view_target_t g_gauge_value;
+
+int demo_bind_gauge_value(lv_obj_t *g, shrewd_basic_reflect_ref_t *ref) {
+    int status = demo_gauge_init();
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    g_gauge_value.write = gauge_value_write;
+    g_gauge_value.read = gauge_value_read;
+    g_gauge_value.changed_event = demo_gauge_event_value_changed;
+    return shrewd_lv_view_bind(g, &g_gauge_value, ref);
+}
 
 lv_obj_t *demo_gauge_create(lv_obj_t *parent) {
     /* **两步**:`create_obj` 只分配,`init_obj` 才跑构造 + 套主题(§7.3)。

@@ -11,8 +11,8 @@
  *
  * 一个水位计:值 0..max,内部一根填充条按比例显示。
  */
-#ifndef SHREWD_LV_VIEW_TESTS_DEMO_GAUGE_H
-#define SHREWD_LV_VIEW_TESTS_DEMO_GAUGE_H
+#ifndef DEMO_COMPONENTS_DEMO_GAUGE_H
+#define DEMO_COMPONENTS_DEMO_GAUGE_H
 
 #include "shrewd-lv-view/view.h"
 
@@ -56,4 +56,12 @@ lv_obj_t *demo_gauge_create(lv_obj_t *parent);
 void demo_gauge_set_value(lv_obj_t *g, int32_t value);
 int32_t demo_gauge_get_value(const lv_obj_t *g);
 
-#endif /* SHREWD_LV_VIEW_TESTS_DEMO_GAUGE_H */
+/**
+ * 把 gauge 的 value 接上响应式绑定。
+ *
+ * **第三方组件库也能扩绑定**(design.md §6 的规则):加一张 target 表 + 一个 3 行
+ * 便捷函数,**不用改框架**。所以组件库的产出物不止 widget,还有它的绑定胶水。
+ */
+int demo_bind_gauge_value(lv_obj_t *g, shrewd_basic_reflect_ref_t *ref);
+
+#endif /* DEMO_COMPONENTS_DEMO_GAUGE_H */

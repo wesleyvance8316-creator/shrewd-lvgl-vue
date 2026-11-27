@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "components/device_card/device_card.h"
+#include "demo/gauge.h"
 
 /* ============================ home:设备列表 ============================ */
 
@@ -133,6 +134,16 @@ static int detail_create(shrewd_lv_view_page_t *p, lv_obj_t *container, const vo
     lv_obj_set_size(slider, LV_HOR_RES - 32, 12);
     lv_obj_align(slider, LV_ALIGN_TOP_LEFT, 8, 32);
     lv_slider_set_range(slider, 0, 100);
+
+    /* 第三方组件库的控件(design.md §7.7):跟原生 widget 一样用,
+       它的绑定胶水也是组件库自己出的(demo_bind_gauge_value)。 */
+    lv_obj_t *gauge = demo_gauge_create(root);
+    lv_obj_set_size(gauge, LV_HOR_RES - 32, 16);
+    lv_obj_align(gauge, LV_ALIGN_TOP_LEFT, 8, 56);
+    int status = demo_bind_gauge_value(gauge, &d->device->battery);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
     return shrewd_lv_view_bind_slider_value(slider, &d->device->battery);
 }
 

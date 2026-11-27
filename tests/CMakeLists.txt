@@ -34,18 +34,6 @@ target_link_libraries(shrewd-lv-view-bind
 
 add_test(NAME shrewd-lv-view.bind COMMAND shrewd-lv-view-bind)
 
-# 组件模型的单测:demo_card 就是样板本身(design.md §7.2)。
-add_executable(shrewd-lv-view-component
-        test_component.c
-        demo_card.c
-        lvgl_fixture.c)
-
-target_link_libraries(shrewd-lv-view-component
-        PRIVATE
-            shrewd-lv-view
-            shrewd-lv-view-warnings)
-
-add_test(NAME shrewd-lv-view.component COMMAND shrewd-lv-view-component)
 
 # 导航栈的单测:四阶段、释放策略、pop_until、上限、守卫(design.md §8)。
 add_executable(shrewd-lv-view-nav
@@ -131,17 +119,5 @@ target_link_libraries(shrewd-lv-view-errors
 
 add_test(NAME shrewd-lv-view.errors COMMAND shrewd-lv-view-errors)
 
-# 控件(widget class)的单测(design.md §7.3):第三档 facade,要 lvgl 私有头。
-add_executable(shrewd-lv-view-widget
-        test_widget.c
-        demo_gauge.c
-        lvgl_fixture.c)
-
-target_link_libraries(shrewd-lv-view-widget
-        PRIVATE
-            shrewd-lv-view
-            shrewd-lv-view-warnings)
-
-add_test(NAME shrewd-lv-view.widget COMMAND shrewd-lv-view-widget)
 
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

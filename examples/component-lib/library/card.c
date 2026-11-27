@@ -2,7 +2,7 @@
  * @file demo_card.c
  * @brief 组件模型样板的实现。
  */
-#include "demo_card.h"
+#include "demo/card.h"
 
 #include <stdio.h>
 #include <string.h>

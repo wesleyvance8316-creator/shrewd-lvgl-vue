@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "demo_card.h"
+#include "demo/card.h"
 #include "lvgl_fixture.h"
 
 static int g_fail;

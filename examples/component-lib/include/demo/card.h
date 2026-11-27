@@ -12,8 +12,8 @@
  *
  * 页面是"片段 + 导航标识"(§8.1);片段本身不带导航,只是被别人用。
  */
-#ifndef SHREWD_LV_VIEW_TESTS_DEMO_CARD_H
-#define SHREWD_LV_VIEW_TESTS_DEMO_CARD_H
+#ifndef DEMO_COMPONENTS_DEMO_CARD_H
+#define DEMO_COMPONENTS_DEMO_CARD_H
 
 #include "shrewd-lv-view/view.h"
 
@@ -69,4 +69,4 @@ int demo_card_create(demo_card_t *c,
 /** 删 root;绑定级联自清,不要手动 dispose 绑定(§3)。 */
 void demo_card_dispose(demo_card_t *c);
 
-#endif /* SHREWD_LV_VIEW_TESTS_DEMO_CARD_H */
+#endif /* DEMO_COMPONENTS_DEMO_CARD_H */
