@@ -189,6 +189,11 @@ int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref);
 组件生态是"**使用者怎么开发、怎么用组件**"的形式化定义。机制面与默认值已全部落定;
 调研依据与被堵死的路见 §7.8。
 
+> **已落地**:`shrewd_lv_view_slot_fn`(§7.5 框架唯一提供的东西)、片段样板
+> `tests/demo_card.{c,h}`(§7.2 + v-model §7.4 + 槽 §7.5 + 设计 token §7.6)、
+> 控件样板 `tests/demo_gauge.{c,h}`(§7.3,含四个坑的实测)。单测
+> `test_component.c` / `test_widget.c`。
+
 ### 7.1 两种产出物
 
 组件库有两种产出物,**层次不同、形态不同**:
@@ -289,10 +294,19 @@ const lv_obj_class_t mylib_gauge_class = {
 };
 ```
 
-两个坑:`LV_PROPERTY_ID(...)` 是**枚举声明**用的宏,不能直接写进数组初始化器;
-`LV_PROPERTY_CLASS_FIELDS(widget, uppercase)` 会去找 `lv_<widget>_properties`,
-名字不对就编译不过。**这些是探针实测出来的**(`/tmp/lvcfg/probe.c` 编译运行通过:
-`sizeof(lv_obj_class_t)=88`、属性号段 `0x10000` 生效)。
+**四个坑**(前两个是探针实测,后两个是把 `tests/demo_gauge.c` 写进树里时撞的,
+**8 条断言齐红才找到**):
+
+| 坑 | 后果 |
+|---|---|
+| `LV_PROPERTY_ID(...)` 是**枚举声明**用的宏 | 不能直接写进数组初始化器 |
+| `LV_PROPERTY_CLASS_FIELDS(widget, uppercase)` 找 `lv_<widget>_properties` | 名字不对就编译不过 |
+| **`lv_obj_class_create_obj()` 只分配,构造在 `lv_obj_class_init_obj()` 里** | 少了第二步,constructor 不跑、属性全落在零值上 —— 要照 `lv_slider_create` 的**两步**写 |
+| `lv_property_ops_t` 的 setter/getter 是 `void *`,而 **ISO C 不许函数指针与对象指针互转** | `-Wpedantic` 必叫,显式转换也压不掉;就地 `#pragma` 抑制,别改签名 |
+
+> 前两个最初只在 `/tmp/lvcfg/probe.c` 里验过(`sizeof(lv_obj_class_t)=88`、属性号段
+> `0x10000` 生效)。现在**树里有真的**:`tests/demo_gauge.{c,h}` + `tests/test_widget.c`,
+> 验类真的造出新类型、props 走 property、自定义事件真发、实例与 property 读回一致。
 
 **自带 `lv_conf.h` 与这两条开关无关,本来就该做**:面向嵌入式,内存 / 字体 / 功能
 裁剪该由我们定,不该吃 lvgl 默认。
@@ -316,6 +330,12 @@ typedef struct {
 组件内部 `bind_slider_value(obj, params->value)` ——② 自动传播 + ③ 写回都在里头。
 **父既不写"更新"也不听"事件"**。这比 Vue 的 `:modelValue` + `@update:modelValue`
 省一层:那里是两条单向的语法糖,这里是直接把 ref 递进去。
+
+> **写回为什么不成环**(实测):**程序化的 `lv_*_set_value()` 不发 `VALUE_CHANGED`**
+> —— 它只置值 + 刷新(`lv_bar_set_value` 就没 `lv_obj_send_event`)。写回只由
+> **用户交互**驱动的事件触发。于是"ref → widget"和"widget → ref"天然分得开:
+> 前者是绑定写 widget,后者只在人动了 UI 时才发生。单测里模拟人是
+> `lv_obj_send_event(obj, LV_EVENT_VALUE_CHANGED, NULL)`。
 
 ### 7.5 slots:构建回调 + 命名槽
 
@@ -977,10 +997,15 @@ C9 facade(三档)。
   "谁是当前"(§7.6);
 - **便捷** `shell_add_tab`:建按钮 + 点击切分支 + 高亮跟上,一行一个 tab。
 
-**至此 §15 的清单清空。** 已落地:依赖与构建、绑定机制(含 v-model 与回路抑制)、
-组件模型、列表对账、跨线程桥 + sb_dbus 合流、导航栈(四阶段/释放策略/守卫/
-`pop_until`/`remove_until`)、栈恢复、分支与模态、壳(标题栏 + 底栏 tab)、脚手架、
-真实页面原型、跨仓约定。11 个单测全绿。
+**组件生态**(§7)也已落地,两种产出物树里都有样板:片段 `demo_card`
+(v-model + 槽 + 设计 token)、控件 `demo_gauge`(`lv_obj_class_t` + 属性表 +
+自定义事件)。框架只多了一个类型 `shrewd_lv_view_slot_fn` —— 其余全是约定和 LVGL
+自己的机制,这正是 §7 的立场。**§7.3 的四个坑是写进树里才撞出来的**,已记在该节。
 
-**再往下是打磨,不是补齐**:组件生态的三档 facade(§7.7)、主题接线(§7.6)、
-props/事件/组件级 v-model(§7.4)—— 那些要等有真实组件需求再动,免得凭空设计。
+**至此 §15 的清单清空。** 已落地:依赖与构建、绑定机制(含 v-model 与回路抑制)、
+组件模型与组件生态、列表对账、跨线程桥 + sb_dbus 合流、导航栈(四阶段/释放策略/
+守卫/`pop_until`/`remove_until`)、栈恢复、分支与模态、壳(标题栏 + 底栏 tab)、
+脚手架、真实页面原型、跨仓约定。**12 个单测全绿。**
+
+**再往下是用,不是设计**:组件库真做成独立 CMake 包(§7.7「普通 C 库」的最后一步)、
+真实控件的绘制与主题接入、props 的类型校验 —— 这些要有真实组件需求再动,免得凭空设计。

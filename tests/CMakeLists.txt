@@ -131,4 +131,17 @@ target_link_libraries(shrewd-lv-view-errors
 
 add_test(NAME shrewd-lv-view.errors COMMAND shrewd-lv-view-errors)
 
+# 控件(widget class)的单测(design.md §7.3):第三档 facade,要 lvgl 私有头。
+add_executable(shrewd-lv-view-widget
+        test_widget.c
+        demo_gauge.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-widget
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.widget COMMAND shrewd-lv-view-widget)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

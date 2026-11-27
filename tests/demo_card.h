@@ -17,11 +17,34 @@
 
 #include "shrewd-lv-view/view.h"
 
-/** 创建参数:可序列化的简单值。 */
+/** 创建参数:可序列化的简单值(§7.2)。 */
 typedef struct {
     const char *title;
     int32_t level;
+    /**
+     * 组件级 v-model(§7.4):**传 ref 即双向**。给了它,内部就绑它,不再用
+     * 自己的 `level_val` —— 父既不写"更新"也不听"事件"。
+     * **不参与序列化**(它是活绑定,不是值),所以带 v-model 的组件不能只靠 params 恢复。
+     */
+    shrewd_basic_reflect_ref_t *level_ref;
 } demo_card_params_t;
+
+/** 槽(§7.5):父提供内容的构建方式,子决定何时、何处调用一次。 */
+typedef struct {
+    shrewd_lv_view_slot_fn footer;
+    void *footer_ctx;
+} demo_card_slots_t;
+
+/**
+ * 设计 token(§7.6):片段**不自造主题引擎**,只暴露可覆盖的 style 常量表,
+ * 创建时套用。要改就在 create 前改它。
+ */
+typedef struct {
+    int32_t height;
+    int32_t pad;
+} demo_card_style_t;
+
+extern demo_card_style_t demo_card_style;
 
 /** 组件实例:调用方内嵌。 */
 typedef struct {
@@ -33,8 +56,15 @@ typedef struct {
     int32_t level_val;
 } demo_card_t;
 
-/** 建 widget 树 + 挂绑定。@p params 为 NULL 时用零值。 */
-int demo_card_create(demo_card_t *c, lv_obj_t *parent, const demo_card_params_t *params);
+/**
+ * 建 widget 树 + 挂绑定。@p params / @p slots 为 NULL 时用默认。
+ * 槽只在创建时调用**一次**(§7.5);槽内容是组件建的 widget 的子节点,
+ * 所以它的绑定随 widget 自清(§3)。
+ */
+int demo_card_create(demo_card_t *c,
+                     lv_obj_t *parent,
+                     const demo_card_params_t *params,
+                     const demo_card_slots_t *slots);
 
 /** 删 root;绑定级联自清,不要手动 dispose 绑定(§3)。 */
 void demo_card_dispose(demo_card_t *c);
