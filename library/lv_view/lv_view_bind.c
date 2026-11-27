@@ -68,16 +68,18 @@ int shrewd_lv_view_bind(void *obj,
     }
     shrewd_lv_view_binding_t *b = NULL;
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_calloc(&slot, 1, sizeof(*b))) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status = shrewd_basic_platform_calloc(&slot, 1, sizeof(*b));
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     b = (shrewd_lv_view_binding_t *)slot;
     b->ref = ref;
     b->target = target;
     b->obj = obj;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&b->scratch, ref->size)) {
+    status = shrewd_basic_platform_alloc(&b->scratch, ref->size);
+    if (SHREWD_BASIC_ERR_OK != status) {
         (void)shrewd_basic_platform_free(&slot);
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        return status;
     }
     /* 先挂清理再建 effect:effect_init 立刻跑一次,若中途失败仍可自清。 */
     if (NULL == lv_obj_add_event_cb((lv_obj_t *)obj, binding_delete, LV_EVENT_DELETE, b)) {
@@ -85,11 +87,12 @@ int shrewd_lv_view_bind(void *obj,
         (void)shrewd_basic_platform_free(&slot);
         return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
     }
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_reflect_effect_init(&b->effect, binding_apply, b)) {
+    status = shrewd_basic_reflect_effect_init(&b->effect, binding_apply, b);
+    if (SHREWD_BASIC_ERR_OK != status) {
         (void)shrewd_basic_platform_free(&b->scratch);
         slot = b;
         (void)shrewd_basic_platform_free(&slot);
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        return status;
     }
     if (NULL != target->read) {
         (void)lv_obj_add_event_cb((lv_obj_t *)obj, binding_changed, target->changed_event, b);

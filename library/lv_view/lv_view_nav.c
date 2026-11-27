@@ -136,9 +136,10 @@ static int stack_reserve(shrewd_lv_view_nav_stack_t *stack, size_t want) {
         cap *= 2;
     }
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK
-        != shrewd_basic_platform_realloc(&slot, stack->entries, cap * sizeof(*stack->entries))) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status
+        = shrewd_basic_platform_realloc(&slot, stack->entries, cap * sizeof(*stack->entries));
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     stack->entries = (shrewd_lv_view_nav_entry_t *)slot;
     stack->capacity = cap;
@@ -201,8 +202,9 @@ static int params_copy(const shrewd_lv_view_page_desc_t *desc,
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&slot, size)) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status = shrewd_basic_platform_alloc(&slot, size);
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     memcpy(slot, params, size);
     *out = slot;
@@ -222,8 +224,9 @@ static int stack_push(shrewd_lv_view_nav_t *nav,
     if (stack->count >= nav->limit) {
         return SHREWD_LV_VIEW_ERR_NAV_STACK_FULL;
     }
-    if (SHREWD_LV_VIEW_ERR_OK != stack_reserve(stack, stack->count + 1)) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int reserve = stack_reserve(stack, stack->count + 1);
+    if (SHREWD_LV_VIEW_ERR_OK != reserve) {
+        return reserve;
     }
     shrewd_lv_view_nav_entry_t *e = &stack->entries[stack->count];
     memset(e, 0, sizeof(*e));
@@ -331,9 +334,10 @@ int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *nav, shrewd_lv_view_page_t
     if (nav->registry_count >= nav->registry_capacity) {
         size_t cap = (0 == nav->registry_capacity) ? NAV_MIN_CAPACITY : nav->registry_capacity * 2;
         void *slot = NULL;
-        if (SHREWD_BASIC_ERR_OK
-            != shrewd_basic_platform_realloc(&slot, nav->registry, cap * sizeof(*nav->registry))) {
-            return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        int status
+            = shrewd_basic_platform_realloc(&slot, nav->registry, cap * sizeof(*nav->registry));
+        if (SHREWD_BASIC_ERR_OK != status) {
+            return status;
         }
         nav->registry = (shrewd_lv_view_page_t **)slot;
         nav->registry_capacity = cap;
@@ -692,14 +696,16 @@ static int stack_snapshot_get(shrewd_lv_view_nav_t *nav,
                               lv_obj_t *host,
                               const unsigned char **in,
                               size_t *left) {
+    (void)host; /* 解析阶段只还原描述,建树在激活时;签名与 set 侧对称。 */
     if (4 > *left) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
     uint32_t count = get_u32(*in);
     *in += 4;
     *left -= 4;
-    if (SHREWD_LV_VIEW_ERR_OK != stack_reserve(stack, (size_t)count)) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int reserve = stack_reserve(stack, (size_t)count);
+    if (SHREWD_LV_VIEW_ERR_OK != reserve) {
+        return reserve;
     }
     for (uint32_t i = 0; i < count; ++i) {
         if (12 > *left) {
@@ -733,8 +739,9 @@ static int stack_snapshot_get(shrewd_lv_view_nav_t *nav,
         e->entered_at = (uint64_t)lv_tick_get();
         if (0 != params_size) {
             void *slot = NULL;
-            if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&slot, params_size)) {
-                return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+            int status = shrewd_basic_platform_alloc(&slot, params_size);
+            if (SHREWD_BASIC_ERR_OK != status) {
+                return status;
             }
             memcpy(slot, *in, params_size);
             e->params = slot;

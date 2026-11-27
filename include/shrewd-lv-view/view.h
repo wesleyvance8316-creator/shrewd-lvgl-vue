@@ -33,13 +33,21 @@ const char *shrewd_lv_view_version(void);
  * ==========================================================================
  *
  * 家法:返回 int,SHREWD_LV_VIEW_ERR_OK (=0) 成功、负值失败,数据走出参。
- * shrewd-basic 的失败原样返回、不跨层重编码(见 docs/design.md §12)。
  *
- * 号段 -0x6000..-0x6fff 是 lv_view 自己的,不占用 shrewd-basic 的域分配法
- * (它按 -N00..-N99 分模块),所以**不需要改动 shrewd-basic**。
+ * **跨仓约定**(docs/design.md §12):
+ *   - shrewd-basic 的失败**原样返回,不跨层重编码** —— 不丢信息,号段不相交
+ *     所以来源一眼可辨;
+ *   - 本仓的码只用于**本仓自己的检查**和 **LVGL 的失败**(LVGL 只返回 NULL/void,
+ *     没有错误码,只能自己起名);
+ *   - `shrewd_lv_view_error_name()` 认本仓的码,其余回落 `shrewd_basic_error_name()`。
+ *
+ * 号段 -0x6000..-0x6fff 是 lv_view 自己的,仓内再按 `-0x6Mxx` 分模块(M=0 通用、
+ * 1 导航)。它不占用 shrewd-basic 的域分配法(那套按十进制 `-N00..-N99` 分模块,
+ * 整套只到 -9999),所以**不需要改动 shrewd-basic**。
  */
 typedef enum shrewd_lv_view_error {
     SHREWD_LV_VIEW_ERR_OK = 0,
+    /* 通用:-0x60xx */
     SHREWD_LV_VIEW_ERR_ARG_INVALID = -0x6001,
     SHREWD_LV_VIEW_ERR_MEM_NOMEM = -0x6002,
     SHREWD_LV_VIEW_ERR_NOT_FOUND = -0x6003,

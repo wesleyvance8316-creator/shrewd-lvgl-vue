@@ -119,4 +119,16 @@ target_link_libraries(shrewd-lv-view-shell
 
 add_test(NAME shrewd-lv-view.shell COMMAND shrewd-lv-view-shell)
 
+# 错误码跨仓约定(design.md §12):shrewd-basic 的失败原样透传、error_name 回落。
+add_executable(shrewd-lv-view-errors
+        test_errors.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-errors
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.errors COMMAND shrewd-lv-view-errors)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

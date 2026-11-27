@@ -36,8 +36,9 @@ int shrewd_lv_view_bridge_init(shrewd_lv_view_bridge_t *b) {
     memset(b, 0, sizeof(*b));
     bridge_state_t *state = NULL;
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_calloc(&slot, 1, sizeof(*state))) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status = shrewd_basic_platform_calloc(&slot, 1, sizeof(*state));
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     state = (bridge_state_t *)slot;
     (void)pthread_mutex_init(&state->lock, NULL);
@@ -77,14 +78,16 @@ int shrewd_lv_view_bridge_post(shrewd_lv_view_bridge_t *b,
     }
     bridge_delivery_t *d = NULL;
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_calloc(&slot, 1, sizeof(*d))) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status = shrewd_basic_platform_calloc(&slot, 1, sizeof(*d));
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     d = (bridge_delivery_t *)slot;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&d->value, size)) {
+    status = shrewd_basic_platform_alloc(&d->value, size);
+    if (SHREWD_BASIC_ERR_OK != status) {
         slot = d;
         (void)shrewd_basic_platform_free(&slot);
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        return status;
     }
     memcpy(d->value, value, size);
     d->ref = ref;
@@ -150,9 +153,9 @@ int shrewd_lv_view_bridge_bind_dbus(shrewd_lv_view_bridge_t *b,
     /* 两个字段都由这里填好 —— 让调用方预填结构体必然会漏一个(实测漏过)。 */
     bind->bridge = b;
     bind->ref = ref;
-    if (SHREWD_BASIC_ERR_OK
-        != shrewd_basic_dbus_subscribe(bus, pattern, bridge_dbus_recv, bind, handle)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    int status = shrewd_basic_dbus_subscribe(bus, pattern, bridge_dbus_recv, bind, handle);
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     return SHREWD_LV_VIEW_ERR_OK;
 }

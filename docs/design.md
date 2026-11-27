@@ -818,12 +818,35 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 
 - **命名**:`shrewd_lv_view_*` / `SHREWD_LV_VIEW_*`。讨论中的临时名不落代码。
 - **内存**:`shrewd_basic_platform_*`,不碰 `malloc`。所有记录都有对应的 dispose。
-- **错误**(D4 已决):返回 `int`,OK=0,负值失败,数据走出参。**自建
-  `shrewd_lv_view_error_t`,同构家族约定,占 -600..-699;shrewd-basic 的失败原样返回,
-  不跨层重编码。** 往别人的枚举里加码是错的,所以自建;但 `MEM_NOMEM` 就是
-  `MEM_NOMEM`,调用方能分辨"内存不足"与"本层参数错"。`shrewd_lv_view_error_name()`
-  对不认识的码回落到 `shrewd_basic_error_name()`,不丢信息。
-  **需与 shrewd-basic 约定 -600..-699 保留给 lv_view**,免得日后撞号。
+- **错误(跨仓约定,D4 已决)**:返回 `int`,OK=0,负值失败,数据走出参。
+  命名同构 `SHREWD_<REPO>_<MODULE>_<INFO>`。**这一段是 shrewd-\* 家族的号段登记表,
+  新仓照抄即可**:
+
+  | 仓 | 号段 | 说明 |
+  |---|---|---|
+  | shrewd-basic | `-1..-99` 通用,模块各占 `-N00..-N99` | log=-100、reflect=-200、json=-300、bin=-400、dbus=-500 …… 整套落在 `-1..-9999` |
+  | shrewd-lvgl-vue | **`-0x6000..-0x6fff`** | 仓内再按模块分 `-0x6Mxx`:M=0 通用、1 导航,以后 2 绑定、3 列表、4 桥、5 壳 |
+  | 其他 shrewd-\* | `-0xN000..-0xNfff` | 一个仓一个十六进制块,先到先得,登记进本表 |
+
+  **两套方案天然不打架**:basic 是十进制 `-N00`,整套只到 `-9999`;下游用十六进制
+  `-0xN000` 起,最小也是 `-4096` 以上。所以**不需要改动 shrewd-basic**,也就谈不上
+  "让它保留号段";若日后想在它那边登记一份保留表,另议。
+
+  > 原稿这里写的是「占 -600..-699」,已作废 —— 那正好是 shrewd-basic 第 6 个模块的
+  > 块(-600..-699),会撞号。改用 `-0x6000..-0x6fff` 是为了躲开它的分配法。
+
+  **三条规则**:
+
+  1. **shrewd-basic 的失败原样返回,不跨层重编码。** 理由是不丢信息 ——
+     `DBUS_CONFLICT` 被压成 `ARG_INVALID` 就是撒谎(参数明明没错)。号段不相交,
+     所以原样返回时**来源一眼可辨**,连映射表都不用维护。
+  2. **本仓的码只用于两件事**:本仓自己的检查(参数、状态),以及 **LVGL 的失败**
+     —— LVGL 只返回 NULL/void、没有错误码,只能自己起名,`MEM_NOMEM` 就是给它留的。
+  3. **`shrewd_lv_view_error_name()` 认本仓的码,其余回落
+     `shrewd_basic_error_name()`**,不丢信息。每个仓都该有这样一个函数。
+
+  `tests/test_errors.c` 钉住这三条:塞一个宽度 `SIZE_MAX` 的 `param_type` 让上游分配
+  真失败,断言回来的是 `-1` 而不是 `-0x6002`;谁把翻译加回来,那条就红。
 - **computed / watch**(D5 已决):**不主动重复暴露**。`view.h` 的 API 形参是
   `shrewd_basic_reflect_ref_t *`,它**必然引入 `react.h`** —— computed / watch 就在
   那个头里,随之可用。`view.h` 只管绑定与页面管理:API 面不膨胀,能力也不缺。
@@ -899,7 +922,7 @@ D1–D5 **已全部落定**,决策写在各自的小节(不在这里堆):
 | **D1** | **作用域模型**:绑定随 widget 自清,组件 dispose 只删 root | §3 | Vue `effectScope` / React cleanup / Android LiveData 同构;只有 Flutter 偏手动,未采纳 |
 | **D2** | **两层**:机制单点 + 便捷函数 | §6 | 无参照,口味;可退成只给便捷函数 |
 | **D3** | **两种都支持**,`char[N]` 为 v-model 默认 | §5 | LVGL 自己就是「拷贝默认 + `_static` 借用」 |
-| **D4** | 自建 `-600..-699`,**shrewd-basic 的码原样返回** | §12 | 家族的域分配法;不跨层重编码 |
+| **D4** | 自建 `-0x6000..-0x6fff`,**shrewd-basic 的码原样返回** | §12 | 号段躲开 basic 的十进制 `-N00` 分配法;不跨层重编码,不丢信息 |
 | **D5** | **不重复暴露**,随 `react.h` 自然可用 | §12 | `view.h` 必然引入 `react.h` |
 
 **D1 的契约**(状态 struct 必须活得比作用域久)由四阶段收口:销毁钩子先删 widget
@@ -940,9 +963,12 @@ C9 facade(三档)。
 逐个清掉,第一个命中的留下;`pred == NULL` 则锚点以下全清。语义取舍见 §8.4 的
 实现修正。
 
+**跨仓约定**(§12)也已落定:号段登记表(shrewd-basic 十进制 `-N00`,下游各仓
+十六进制 `-0xN000`,两套天然不撞)、**shrewd-basic 的失败原样透传不重编码**、
+`error_name` 认本仓的其余回落。原稿写的 `-600..-699` 作废 —— 那正好是 basic 第 6
+个模块的块;改用 `-0x6000..-0x6fff`。**无需改动 shrewd-basic**。
+
 **下一步(不是待决,是未做)**:
 
-1. **与 shrewd-basic 的跨仓约定**:`-0x6000..-0x6fff` 号段是 lv_view 自己的,不占用
-   shrewd-basic 的域分配法,**无需改动 shrewd-basic**;若要在它那边登记,另议。
-2. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
+1. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
    tab 高亮是它的一个绑定;需要一个 target 或留给应用自己写。

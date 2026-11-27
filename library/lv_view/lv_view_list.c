@@ -63,9 +63,9 @@ static int list_add(shrewd_lv_view_list_binding_t *b,
     if (b->count >= b->capacity) {
         size_t cap = (0 == b->capacity) ? LIST_MIN_CAPACITY : b->capacity * 2;
         void *slot = NULL;
-        if (SHREWD_BASIC_ERR_OK
-            != shrewd_basic_platform_realloc(&slot, b->slots, cap * sizeof(*b->slots))) {
-            return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        int status = shrewd_basic_platform_realloc(&slot, b->slots, cap * sizeof(*b->slots));
+        if (SHREWD_BASIC_ERR_OK != status) {
+            return status;
         }
         b->slots = (shrewd_lv_view_list_slot_t *)slot;
         b->capacity = cap;
@@ -213,8 +213,9 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
     }
     shrewd_lv_view_list_binding_t *b = NULL;
     void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_calloc(&slot, 1, sizeof(*b))) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    int status = shrewd_basic_platform_calloc(&slot, 1, sizeof(*b));
+    if (SHREWD_BASIC_ERR_OK != status) {
+        return status;
     }
     b = (shrewd_lv_view_list_binding_t *)slot;
     b->source = source;
@@ -227,10 +228,11 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
         (void)shrewd_basic_platform_free(&slot);
         return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
     }
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_reflect_effect_init(&b->effect, list_apply, b)) {
+    status = shrewd_basic_reflect_effect_init(&b->effect, list_apply, b);
+    if (SHREWD_BASIC_ERR_OK != status) {
         slot = b;
         (void)shrewd_basic_platform_free(&slot);
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        return status;
     }
     return SHREWD_LV_VIEW_ERR_OK;
 }
