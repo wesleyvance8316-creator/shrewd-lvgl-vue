@@ -75,7 +75,8 @@ static void page_init(test_page_t *p, const shrewd_lv_view_page_desc_t *desc) {
 static void test_round_trip(void) {
     printf("test_round_trip\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     static test_page_t a;
@@ -99,7 +100,8 @@ static void test_round_trip(void) {
 
     /* 重启:实例复用(真实里是新的静态实例),登记后恢复。 */
     shrewd_lv_view_nav_dispose(&nav);
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init (restart)");
     check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_register(&nav, &a.base), "register home");
     check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_register(&nav, &b.base), "register settings");
@@ -131,7 +133,8 @@ static void test_round_trip(void) {
 static void test_unknown_page(void) {
     printf("test_unknown_page\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     static test_page_t a;
@@ -145,7 +148,8 @@ static void test_unknown_page(void) {
 
     /* 不登记就恢复:找不到 "home" */
     shrewd_lv_view_nav_dispose(&nav);
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
     check(SHREWD_LV_VIEW_ERR_NOT_FOUND == shrewd_lv_view_nav_restore(&nav, buf, size),
           "restore fails: page not registered");
@@ -158,7 +162,8 @@ static void test_unknown_page(void) {
 static void test_corrupt_snapshot(void) {
     printf("test_corrupt_snapshot\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     unsigned char junk[32];

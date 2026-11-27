@@ -481,17 +481,26 @@ typedef struct {
 **操作集**(architecture.md 6.6):
 
 ```c
-/* 已实现 */
+/* 已实现 —— 作用在**当前栈**(模态非空时是它,否则当前分支) */
 int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page, const void *params);
 int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *);
 int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *, shrewd_lv_view_nav_pred_fn, void *ctx);
 int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page, const void *params);
 
+/* 已实现 —— 分支与模态(architecture.md §6.9) */
+int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *, size_t branch);
+int shrewd_lv_view_nav_modal_push(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page,
+                                  const void *params);
+
 /* 未实现(M3) */
 int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *anchor,
                                     shrewd_lv_view_nav_pred_fn, void *ctx);
-int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *, unsigned branch);
 ```
+
+**分支与模态是同一套操作作用在不同的栈上**:`switch_branch` 换分支(不产生历史);
+**模态栈初始为空,`push` 进不去它** —— 所以"打开模态"是一个独立操作
+(`nav_modal_push`)。此后 `push`/`pop` 都作用在模态栈上(可嵌套),关完最后一层即
+回到分支。**模态压着时不允许 `switch_branch`**。
 
 > **实现修正**:原稿 `push`/`replace` 收 `desc`,但 §8.3 定的是**实例调用方持有** ——
 > 两者不一致。改为收**实例**(实例里就有 `desc`,更直接);**登记表留给恢复用**,

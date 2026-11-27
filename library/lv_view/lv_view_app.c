@@ -62,7 +62,10 @@ int shrewd_lv_view_app_init(shrewd_lv_view_app_t *app, lv_display_t *display) {
     lv_obj_set_size(app->host,
                     lv_display_get_horizontal_resolution(app->display),
                     lv_display_get_vertical_resolution(app->display));
-    return shrewd_lv_view_nav_init(&app->nav, app->host, SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT);
+    return shrewd_lv_view_nav_init(&app->nav,
+                                   app->host,
+                                   lv_display_get_layer_top(app->display),
+                                   SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT);
 }
 
 int shrewd_lv_view_app_use(shrewd_lv_view_app_t *app, const shrewd_lv_view_plugin_t *plugin) {

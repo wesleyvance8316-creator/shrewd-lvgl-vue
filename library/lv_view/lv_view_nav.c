@@ -1,10 +1,14 @@
 /**
  * @file lv_view_nav.c
- * @brief 导航栈(architecture.md §6.6–6.7 / design.md §8.4–8.5)。
+ * @brief 导航:分层的栈(architecture.md §6.6–6.9 / design.md §8)。
  *
  * 栈条目是**描述**,不持 widget;**栈深 ≠ 实例数** —— widget 树由释放策略
  * 独立决定何时建/销(§6.3)。四阶段钩子(创建/激活/失活/销毁)由这里驱动,
  * 顺序确定、一定被调用(§6.2)。
+ *
+ * 结构是**分层的栈**(§6.9):分支各持独立栈(tab 切换不产生历史),
+ * 模态是独立一层、叠在 LVGL top layer 上。操作集只有一套,作用在**当前栈**:
+ * 模态栈非空时是它,否则是当前分支 —— 模态因此天然叠在最上、还能嵌套。
  */
 
 #include <string.h>
@@ -14,7 +18,7 @@
 
 #define NAV_MIN_CAPACITY 8
 
-/* --- 栈条目:widget 树的建 / 销 ------------------------------------- */
+/* --- widget 树的建 / 销 --------------------------------------------- */
 
 /** 销毁 widget 树。绑定随 widget 级联自清(design.md §3)。 */
 static void entry_destroy(shrewd_lv_view_nav_entry_t *e) {
@@ -32,12 +36,12 @@ static void entry_destroy(shrewd_lv_view_nav_entry_t *e) {
 }
 
 /** 让条目成为活动页:创建(若未建)+ 激活。 */
-static int entry_activate(shrewd_lv_view_nav_t *nav, shrewd_lv_view_nav_entry_t *e) {
+static int entry_activate(lv_obj_t *host, shrewd_lv_view_nav_entry_t *e) {
     if (0 == e->built) {
         if (NULL == e->page->desc->create) {
             return SHREWD_LV_VIEW_ERR_ARG_INVALID;
         }
-        int status = e->page->desc->create(e->page, nav->host, e->params);
+        int status = e->page->desc->create(e->page, host, e->params);
         if (SHREWD_LV_VIEW_ERR_OK != status) {
             return status;
         }
@@ -59,28 +63,46 @@ static void entry_deactivate(shrewd_lv_view_nav_entry_t *e) {
     }
 }
 
-/**
- * 缓存预算:RELEASE_CACHE 的页面最多留 cache_count 个已建的 widget 树,
- * 超出按"最久未激活"淘汰(architecture.md §6.5)。
- */
+static void entry_free_params(shrewd_lv_view_nav_entry_t *e) {
+    if (NULL != e->params) {
+        void *p = e->params;
+        (void)shrewd_basic_platform_free(&p);
+        e->params = NULL;
+        e->params_size = 0;
+    }
+}
+
+/** 缓存预算:RELEASE_CACHE 最多留 cache_count 个已建的,超出按最久未激活淘汰。 */
 static void enforce_cache(shrewd_lv_view_nav_t *nav) {
     size_t budget = 0;
     size_t built = 0;
-    for (size_t i = 0; i < nav->count; ++i) {
-        if (0 != nav->entries[i].built) {
+    shrewd_lv_view_nav_stack_t *stacks[SHREWD_LV_VIEW_NAV_BRANCHES + 1];
+    size_t nstacks = 0;
+    for (size_t i = 0; i < nav->branch_count; ++i) {
+        stacks[nstacks++] = &nav->branches[i];
+    }
+    stacks[nstacks++] = &nav->modal;
+    for (size_t s = 0; s < nstacks; ++s) {
+        for (size_t i = 0; i < stacks[s]->count; ++i) {
+            shrewd_lv_view_nav_entry_t *e = &stacks[s]->entries[i];
+            if (0 == e->built) {
+                continue;
+            }
             built += 1;
-            if (SHREWD_LV_VIEW_RELEASE_CACHE == nav->entries[i].page->desc->release) {
-                budget += nav->entries[i].page->desc->cache_count;
+            if (SHREWD_LV_VIEW_RELEASE_CACHE == e->page->desc->release) {
+                budget += e->page->desc->cache_count;
             }
         }
     }
     while (built > budget) {
         shrewd_lv_view_nav_entry_t *oldest = NULL;
-        for (size_t i = 0; i < nav->count; ++i) {
-            if ((0 != nav->entries[i].built)
-                && (SHREWD_LV_VIEW_RELEASE_CACHE == nav->entries[i].page->desc->release)
-                && ((NULL == oldest) || (nav->entries[i].entered_at < oldest->entered_at))) {
-                oldest = &nav->entries[i];
+        for (size_t s = 0; s < nstacks; ++s) {
+            for (size_t i = 0; i < stacks[s]->count; ++i) {
+                shrewd_lv_view_nav_entry_t *e = &stacks[s]->entries[i];
+                if ((0 != e->built) && (SHREWD_LV_VIEW_RELEASE_CACHE == e->page->desc->release)
+                    && ((NULL == oldest) || (e->entered_at < oldest->entered_at))) {
+                    oldest = e;
+                }
             }
         }
         if (NULL == oldest) {
@@ -93,29 +115,49 @@ static void enforce_cache(shrewd_lv_view_nav_t *nav) {
 
 /* --- 栈容器 ---------------------------------------------------------- */
 
-static int nav_reserve(shrewd_lv_view_nav_t *nav, size_t want) {
-    if (want <= nav->capacity) {
+static int stack_reserve(shrewd_lv_view_nav_stack_t *stack, size_t want) {
+    if (want <= stack->capacity) {
         return SHREWD_LV_VIEW_ERR_OK;
     }
-    size_t cap = (0 == nav->capacity) ? NAV_MIN_CAPACITY : nav->capacity;
+    size_t cap = (0 == stack->capacity) ? NAV_MIN_CAPACITY : stack->capacity;
     while (cap < want) {
         cap *= 2;
     }
     void *slot = NULL;
     if (SHREWD_BASIC_ERR_OK
-        != shrewd_basic_platform_realloc(&slot, nav->entries, cap * sizeof(*nav->entries))) {
+        != shrewd_basic_platform_realloc(&slot, stack->entries, cap * sizeof(*stack->entries))) {
         return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
     }
-    nav->entries = (shrewd_lv_view_nav_entry_t *)slot;
-    nav->capacity = cap;
+    stack->entries = (shrewd_lv_view_nav_entry_t *)slot;
+    stack->capacity = cap;
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
-static shrewd_lv_view_nav_entry_t *nav_top_entry(shrewd_lv_view_nav_t *nav) {
-    return (0 < nav->count) ? &nav->entries[nav->count - 1] : NULL;
+static shrewd_lv_view_nav_entry_t *stack_top(shrewd_lv_view_nav_stack_t *stack) {
+    return (0 < stack->count) ? &stack->entries[stack->count - 1] : NULL;
 }
 
-/** 走守卫。返回 GUARD_* 的判定,或 <0 表示守卫无法完成。 */
+/** 当前栈:模态非空时是它,否则当前分支(§6.9)。 */
+static shrewd_lv_view_nav_stack_t *nav_active(shrewd_lv_view_nav_t *nav) {
+    return (0 < nav->modal.count) ? &nav->modal : &nav->branches[nav->current];
+}
+
+static lv_obj_t *nav_active_host(shrewd_lv_view_nav_t *nav) {
+    return (0 < nav->modal.count) ? nav->modal_host : nav->host;
+}
+
+/** 清空一个栈:逐个失活 + 按策略销毁 + 释放参数副本。 */
+static void stack_clear(shrewd_lv_view_nav_stack_t *stack) {
+    while (0 < stack->count) {
+        shrewd_lv_view_nav_entry_t *top = stack_top(stack);
+        entry_deactivate(top);
+        entry_free_params(top);
+        stack->count -= 1;
+    }
+}
+
+/* --- 公共小工具 ------------------------------------------------------ */
+
 static shrewd_lv_view_guard_result_t nav_check(shrewd_lv_view_nav_t *nav,
                                                shrewd_lv_view_page_t *to,
                                                shrewd_lv_view_page_t **redirect) {
@@ -126,7 +168,8 @@ static shrewd_lv_view_guard_result_t nav_check(shrewd_lv_view_nav_t *nav,
     shrewd_lv_view_nav_request_t req;
     memset(&req, 0, sizeof(req));
     req.to = (NULL != to) ? to->desc : NULL;
-    req.from = (NULL != nav_top_entry(nav)) ? nav_top_entry(nav)->page->desc : NULL;
+    shrewd_lv_view_nav_entry_t *top = stack_top(nav_active(nav));
+    req.from = (NULL != top) ? top->page->desc : NULL;
     shrewd_lv_view_guard_result_t verdict = nav->guard(nav->guard_ctx, &req);
     *redirect = req.redirect;
     return verdict;
@@ -155,14 +198,52 @@ static int params_copy(const shrewd_lv_view_page_desc_t *desc,
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
-int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav, lv_obj_t *host, size_t limit) {
+/** 往栈里压一条并激活它(旧栈顶先失活)。 */
+static int stack_push(shrewd_lv_view_nav_t *nav,
+                      shrewd_lv_view_nav_stack_t *stack,
+                      lv_obj_t *host,
+                      shrewd_lv_view_page_t *page,
+                      const void *params) {
+    if (stack->count >= nav->limit) {
+        return SHREWD_LV_VIEW_ERR_NAV_STACK_FULL;
+    }
+    if (SHREWD_LV_VIEW_ERR_OK != stack_reserve(stack, stack->count + 1)) {
+        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    }
+    shrewd_lv_view_nav_entry_t *e = &stack->entries[stack->count];
+    memset(e, 0, sizeof(*e));
+    e->page = page;
+    e->seq = nav->next_seq;
+    nav->next_seq += 1;
+    e->entered_at = (uint64_t)lv_tick_get();
+    int status = params_copy(page->desc, params, &e->params, &e->params_size);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    shrewd_lv_view_nav_entry_t *prev = stack_top(stack);
+    if (NULL != prev) {
+        entry_deactivate(prev);
+    }
+    stack->count += 1;
+    return entry_activate(host, e);
+}
+
+/* --- 生命周期 -------------------------------------------------------- */
+
+int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav,
+                            lv_obj_t *host,
+                            lv_obj_t *modal_host,
+                            size_t limit) {
     if ((NULL == nav) || (NULL == host)) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
     memset(nav, 0, sizeof(*nav));
     nav->host = host;
+    nav->modal_host = modal_host;
     nav->limit = (0 == limit) ? SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT : limit;
     nav->next_seq = 1;
+    nav->branch_count = 1;
+    nav->current = 0;
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
@@ -170,15 +251,20 @@ void shrewd_lv_view_nav_dispose(shrewd_lv_view_nav_t *nav) {
     if (NULL == nav) {
         return;
     }
-    for (size_t i = 0; i < nav->count; ++i) {
-        entry_destroy(&nav->entries[i]);
-        if (NULL != nav->entries[i].params) {
-            void *p = nav->entries[i].params;
+    for (size_t i = 0; i < nav->branch_count; ++i) {
+        stack_clear(&nav->branches[i]);
+        if (NULL != nav->branches[i].entries) {
+            void *p = nav->branches[i].entries;
             (void)shrewd_basic_platform_free(&p);
         }
     }
-    if (NULL != nav->entries) {
-        void *p = nav->entries;
+    stack_clear(&nav->modal);
+    if (NULL != nav->modal.entries) {
+        void *p = nav->modal.entries;
+        (void)shrewd_basic_platform_free(&p);
+    }
+    if (NULL != nav->registry) {
+        void *p = nav->registry;
         (void)shrewd_basic_platform_free(&p);
     }
     memset(nav, 0, sizeof(*nav));
@@ -194,170 +280,7 @@ void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *nav,
     nav->guard_ctx = ctx;
 }
 
-size_t shrewd_lv_view_nav_depth(const shrewd_lv_view_nav_t *nav) {
-    return (NULL != nav) ? nav->count : 0;
-}
-
-shrewd_lv_view_page_t *shrewd_lv_view_nav_top(shrewd_lv_view_nav_t *nav) {
-    shrewd_lv_view_nav_entry_t *e = nav_top_entry(nav);
-    return (NULL != e) ? e->page : NULL;
-}
-
-int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
-                            shrewd_lv_view_page_t *page,
-                            const void *params) {
-    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    if (nav->count >= nav->limit) {
-        return SHREWD_LV_VIEW_ERR_NAV_STACK_FULL;
-    }
-    shrewd_lv_view_page_t *redirect = NULL;
-    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
-    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
-        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
-    }
-    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
-        return SHREWD_LV_VIEW_ERR_OK;
-    }
-    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
-        page = (NULL != redirect) ? redirect : page;
-    }
-    if (SHREWD_LV_VIEW_ERR_OK != nav_reserve(nav, nav->count + 1)) {
-        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
-    }
-    shrewd_lv_view_nav_entry_t *e = &nav->entries[nav->count];
-    memset(e, 0, sizeof(*e));
-    e->page = page;
-    e->seq = nav->next_seq;
-    nav->next_seq += 1;
-    e->entered_at = (uint64_t)lv_tick_get();
-    int status = params_copy(page->desc, params, &e->params, &e->params_size);
-    if (SHREWD_LV_VIEW_ERR_OK != status) {
-        return status;
-    }
-    /* push 顺带登记:让 name -> 实例 可查,恢复就不用额外记账。 */
-    (void)shrewd_lv_view_nav_register(nav, page);
-    shrewd_lv_view_nav_entry_t *prev = nav_top_entry(nav);
-    if (NULL != prev) {
-        entry_deactivate(prev);
-    }
-    nav->count += 1;
-    status = entry_activate(nav, e);
-    if (SHREWD_LV_VIEW_ERR_OK != status) {
-        return status;
-    }
-    enforce_cache(nav);
-    return SHREWD_LV_VIEW_ERR_OK;
-}
-
-int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *nav) {
-    if (NULL == nav) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
-    if (NULL == top) {
-        return SHREWD_LV_VIEW_ERR_NAV_EMPTY;
-    }
-    shrewd_lv_view_page_t *redirect = NULL;
-    shrewd_lv_view_guard_result_t verdict = nav_check(nav, NULL, &redirect);
-    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
-        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
-    }
-    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
-        return SHREWD_LV_VIEW_ERR_OK;
-    }
-    entry_deactivate(top);
-    if (NULL != top->params) {
-        void *p = top->params;
-        (void)shrewd_basic_platform_free(&p);
-    }
-    nav->count -= 1;
-    shrewd_lv_view_nav_entry_t *now = nav_top_entry(nav);
-    if (NULL != now) {
-        return entry_activate(nav, now);
-    }
-    return SHREWD_LV_VIEW_ERR_OK;
-}
-
-int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
-                                 shrewd_lv_view_nav_pred_fn pred,
-                                 void *ctx) {
-    if ((NULL == nav) || (NULL == pred)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    while (0 < nav->count) {
-        shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
-        if (0 != pred(ctx, top->page)) {
-            /* 命中即停。新栈顶的激活由 nav_pop 做过,这里不能再来一次。 */
-            return SHREWD_LV_VIEW_ERR_OK;
-        }
-        int status = shrewd_lv_view_nav_pop(nav);
-        if (SHREWD_LV_VIEW_ERR_OK != status) {
-            return status;
-        }
-    }
-    return SHREWD_LV_VIEW_ERR_NAV_EMPTY;
-}
-
-int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
-                               shrewd_lv_view_page_t *page,
-                               const void *params) {
-    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    shrewd_lv_view_page_t *redirect = NULL;
-    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
-    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
-        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
-    }
-    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
-        return SHREWD_LV_VIEW_ERR_OK;
-    }
-    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
-        page = (NULL != redirect) ? redirect : page;
-    }
-    shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
-    if (NULL == top) {
-        /* 空栈上 replace 等价于 push,但不产生历史。 */
-        return shrewd_lv_view_nav_push(nav, page, params);
-    }
-    if (top->page == page) {
-        /* 同页:只换参数,不重建。 */
-        void *copy = NULL;
-        size_t size = 0;
-        int status = params_copy(page->desc, params, &copy, &size);
-        if (SHREWD_LV_VIEW_ERR_OK != status) {
-            return status;
-        }
-        if (NULL != top->params) {
-            void *p = top->params;
-            (void)shrewd_basic_platform_free(&p);
-        }
-        top->params = copy;
-        top->params_size = size;
-        return SHREWD_LV_VIEW_ERR_OK;
-    }
-    entry_deactivate(top);
-    if (NULL != top->params) {
-        void *p = top->params;
-        (void)shrewd_basic_platform_free(&p);
-    }
-    memset(top, 0, sizeof(*top));
-    top->page = page;
-    top->seq = nav->next_seq;
-    nav->next_seq += 1;
-    top->entered_at = (uint64_t)lv_tick_get();
-    int status = params_copy(page->desc, params, &top->params, &top->params_size);
-    if (SHREWD_LV_VIEW_ERR_OK != status) {
-        return status;
-    }
-    status = entry_activate(nav, top);
-    enforce_cache(nav);
-    return status;
-}
-
-/* --- 页面登记表:name -> 实例(只服务恢复,§8.6)-------------------- */
+/* --- 登记表:name -> 实例(只服务恢复,§8.6)------------------------- */
 
 int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *nav, shrewd_lv_view_page_t *page) {
     if ((NULL == nav) || (NULL == page) || (NULL == page->desc) || (NULL == page->desc->name)) {
@@ -393,11 +316,206 @@ static shrewd_lv_view_page_t *nav_find_by_name(shrewd_lv_view_nav_t *nav, const 
     return NULL;
 }
 
+/* --- 操作集:作用在当前栈 ------------------------------------------- */
+
+size_t shrewd_lv_view_nav_depth(const shrewd_lv_view_nav_t *nav) {
+    if (NULL == nav) {
+        return 0;
+    }
+    return (0 < nav->modal.count) ? nav->modal.count : nav->branches[nav->current].count;
+}
+
+int shrewd_lv_view_nav_in_modal(const shrewd_lv_view_nav_t *nav) {
+    return (NULL != nav) && (0 < nav->modal.count);
+}
+
+shrewd_lv_view_page_t *shrewd_lv_view_nav_top(shrewd_lv_view_nav_t *nav) {
+    if (NULL == nav) {
+        return NULL;
+    }
+    shrewd_lv_view_nav_entry_t *e = stack_top(nav_active(nav));
+    return (NULL != e) ? e->page : NULL;
+}
+
+int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *nav, size_t branch) {
+    if ((NULL == nav) || (SHREWD_LV_VIEW_NAV_BRANCHES <= branch)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (0 < nav->modal.count) {
+        return SHREWD_LV_VIEW_ERR_FULL; /* 模态压着时不能换分支 */
+    }
+    if (branch == nav->current) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    /* 换分支 = 旧分支失活,新分支激活。**不产生历史**(§6.9)。 */
+    shrewd_lv_view_nav_entry_t *old = stack_top(&nav->branches[nav->current]);
+    if (branch >= nav->branch_count) {
+        nav->branch_count = branch + 1;
+    }
+    nav->current = branch;
+    if (NULL != old) {
+        entry_deactivate(old);
+    }
+    shrewd_lv_view_nav_entry_t *now = stack_top(&nav->branches[nav->current]);
+    return (NULL != now) ? entry_activate(nav->host, now) : SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
+                            shrewd_lv_view_page_t *page,
+                            const void *params) {
+    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    shrewd_lv_view_page_t *redirect = NULL;
+    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
+    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
+        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
+    }
+    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
+        page = (NULL != redirect) ? redirect : page;
+    }
+    /* push 顺带登记:让 name -> 实例 可查,恢复就不用额外记账。 */
+    (void)shrewd_lv_view_nav_register(nav, page);
+    int status = stack_push(nav, nav_active(nav), nav_active_host(nav), page, params);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    enforce_cache(nav);
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_modal_push(shrewd_lv_view_nav_t *nav,
+                                  shrewd_lv_view_page_t *page,
+                                  const void *params) {
+    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    shrewd_lv_view_page_t *redirect = NULL;
+    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
+    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
+        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
+    }
+    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
+        page = (NULL != redirect) ? redirect : page;
+    }
+    (void)shrewd_lv_view_nav_register(nav, page);
+    /* 显式压进模态栈 —— 不管当前栈是什么。 */
+    int status = stack_push(nav, &nav->modal, nav->modal_host, page, params);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    enforce_cache(nav);
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *nav) {
+    if (NULL == nav) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    shrewd_lv_view_nav_stack_t *stack = nav_active(nav);
+    shrewd_lv_view_nav_entry_t *top = stack_top(stack);
+    if (NULL == top) {
+        return SHREWD_LV_VIEW_ERR_NAV_EMPTY;
+    }
+    shrewd_lv_view_page_t *redirect = NULL;
+    shrewd_lv_view_guard_result_t verdict = nav_check(nav, NULL, &redirect);
+    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
+        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
+    }
+    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    entry_deactivate(top);
+    entry_free_params(top);
+    stack->count -= 1;
+    shrewd_lv_view_nav_entry_t *now = stack_top(stack);
+    return (NULL != now) ? entry_activate(nav_active_host(nav), now) : SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
+                                 shrewd_lv_view_nav_pred_fn pred,
+                                 void *ctx) {
+    if ((NULL == nav) || (NULL == pred)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    while (0 < shrewd_lv_view_nav_depth(nav)) {
+        shrewd_lv_view_nav_entry_t *top = stack_top(nav_active(nav));
+        if (0 != pred(ctx, top->page)) {
+            /* 命中即停。新栈顶的激活由 nav_pop 做过,这里不能再来一次。 */
+            return SHREWD_LV_VIEW_ERR_OK;
+        }
+        int status = shrewd_lv_view_nav_pop(nav);
+        if (SHREWD_LV_VIEW_ERR_OK != status) {
+            return status;
+        }
+    }
+    return SHREWD_LV_VIEW_ERR_NAV_EMPTY;
+}
+
+int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
+                               shrewd_lv_view_page_t *page,
+                               const void *params) {
+    if ((NULL == nav) || (NULL == page) || (NULL == page->desc)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    shrewd_lv_view_page_t *redirect = NULL;
+    shrewd_lv_view_guard_result_t verdict = nav_check(nav, page, &redirect);
+    if (SHREWD_LV_VIEW_GUARD_CANCEL == verdict) {
+        return SHREWD_LV_VIEW_ERR_NAV_CANCELLED;
+    }
+    if (SHREWD_LV_VIEW_GUARD_CONSUME == verdict) {
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    if (SHREWD_LV_VIEW_GUARD_REDIRECT == verdict) {
+        page = (NULL != redirect) ? redirect : page;
+    }
+    (void)shrewd_lv_view_nav_register(nav, page);
+    shrewd_lv_view_nav_stack_t *stack = nav_active(nav);
+    shrewd_lv_view_nav_entry_t *top = stack_top(stack);
+    if (NULL == top) {
+        return stack_push(nav, stack, nav_active_host(nav), page, params);
+    }
+    if (top->page == page) {
+        void *copy = NULL;
+        size_t size = 0;
+        int status = params_copy(page->desc, params, &copy, &size);
+        if (SHREWD_LV_VIEW_ERR_OK != status) {
+            return status;
+        }
+        entry_free_params(top);
+        top->params = copy;
+        top->params_size = size;
+        return SHREWD_LV_VIEW_ERR_OK;
+    }
+    entry_deactivate(top);
+    entry_free_params(top);
+    memset(top, 0, sizeof(*top));
+    top->page = page;
+    top->seq = nav->next_seq;
+    nav->next_seq += 1;
+    top->entered_at = (uint64_t)lv_tick_get();
+    int status = params_copy(page->desc, params, &top->params, &top->params_size);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    status = entry_activate(nav_active_host(nav), top);
+    enforce_cache(nav);
+    return status;
+}
+
 /* --- 栈快照(§8.6)-------------------------------------------------
  *
  * 小端显式,不依赖宿主字节序:
- *   u32 magic 'SLVN' | u32 version | u32 count
- *   每条: u32 seq | u32 name_len | u32 params_size | name | params
+ *   u32 magic 'SLVN' | u32 version | u32 branch_count | u32 current
+ *   每个分支: u32 count + 条目 × count
+ *   模态:     u32 count + 条目 × count
+ *   条目:     u32 seq | u32 name_len | u32 params_size | name | params
  */
 
 #define NAV_SNAPSHOT_MAGIC 0x4E564C53u
@@ -415,16 +533,47 @@ static uint32_t get_u32(const unsigned char *p) {
            | ((uint32_t)p[3] << 24);
 }
 
+static size_t stack_snapshot_size(const shrewd_lv_view_nav_stack_t *stack) {
+    size_t total = 4; /* count */
+    for (size_t i = 0; i < stack->count; ++i) {
+        const shrewd_lv_view_page_desc_t *desc = stack->entries[i].page->desc;
+        size_t name_len = (NULL != desc->name) ? strlen(desc->name) : 0;
+        total += 12 + name_len + stack->entries[i].params_size;
+    }
+    return total;
+}
+
+static void stack_snapshot_put(unsigned char **out, const shrewd_lv_view_nav_stack_t *stack) {
+    put_u32(*out, (uint32_t)stack->count);
+    *out += 4;
+    for (size_t i = 0; i < stack->count; ++i) {
+        const shrewd_lv_view_nav_entry_t *e = &stack->entries[i];
+        const char *name = e->page->desc->name;
+        uint32_t name_len = (uint32_t)((NULL != name) ? strlen(name) : 0);
+        put_u32(*out, e->seq);
+        put_u32(*out + 4, name_len);
+        put_u32(*out + 8, (uint32_t)e->params_size);
+        *out += 12;
+        if (0 != name_len) {
+            memcpy(*out, name, name_len);
+            *out += name_len;
+        }
+        if (0 != e->params_size) {
+            memcpy(*out, e->params, e->params_size);
+            *out += e->params_size;
+        }
+    }
+}
+
 int shrewd_lv_view_nav_save_size(const shrewd_lv_view_nav_t *nav, size_t *out_size) {
     if ((NULL == nav) || (NULL == out_size)) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
-    size_t total = 12; /* magic + version + count */
-    for (size_t i = 0; i < nav->count; ++i) {
-        const shrewd_lv_view_page_desc_t *desc = nav->entries[i].page->desc;
-        size_t name_len = (NULL != desc->name) ? strlen(desc->name) : 0;
-        total += 12 + name_len + nav->entries[i].params_size;
+    size_t total = 16; /* magic + version + branch_count + current */
+    for (size_t i = 0; i < nav->branch_count; ++i) {
+        total += stack_snapshot_size(&nav->branches[i]);
     }
+    total += stack_snapshot_size(&nav->modal);
     *out_size = total;
     return SHREWD_LV_VIEW_ERR_OK;
 }
@@ -443,88 +592,57 @@ int shrewd_lv_view_nav_save(const shrewd_lv_view_nav_t *nav, void *buf, size_t s
     unsigned char *out = (unsigned char *)buf;
     put_u32(out, NAV_SNAPSHOT_MAGIC);
     put_u32(out + 4, NAV_SNAPSHOT_VERSION);
-    put_u32(out + 8, (uint32_t)nav->count);
-    out += 12;
-    for (size_t i = 0; i < nav->count; ++i) {
-        const shrewd_lv_view_nav_entry_t *e = &nav->entries[i];
-        const char *name = e->page->desc->name;
-        uint32_t name_len = (uint32_t)((NULL != name) ? strlen(name) : 0);
-        put_u32(out, e->seq);
-        put_u32(out + 4, name_len);
-        put_u32(out + 8, (uint32_t)e->params_size);
-        out += 12;
-        if (0 != name_len) {
-            memcpy(out, name, name_len);
-            out += name_len;
-        }
-        if (0 != e->params_size) {
-            memcpy(out, e->params, e->params_size);
-            out += e->params_size;
-        }
+    put_u32(out + 8, (uint32_t)nav->branch_count);
+    put_u32(out + 12, (uint32_t)nav->current);
+    out += 16;
+    for (size_t i = 0; i < nav->branch_count; ++i) {
+        stack_snapshot_put(&out, &nav->branches[i]);
     }
+    stack_snapshot_put(&out, &nav->modal);
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
-/** 清空栈:逐个失活 + 按策略销毁 + 释放参数副本。 */
-static void nav_clear(shrewd_lv_view_nav_t *nav) {
-    while (0 < nav->count) {
-        shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
-        entry_deactivate(top);
-        if (NULL != top->params) {
-            void *p = top->params;
-            (void)shrewd_basic_platform_free(&p);
-        }
-        nav->count -= 1;
-    }
-}
-
-int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_t size) {
-    if ((NULL == nav) || (NULL == buf) || (12 > size)) {
+/** 从快照读回一个栈。 */
+static int stack_snapshot_get(shrewd_lv_view_nav_t *nav,
+                              shrewd_lv_view_nav_stack_t *stack,
+                              lv_obj_t *host,
+                              const unsigned char **in,
+                              size_t *left) {
+    if (4 > *left) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
-    const unsigned char *in = (const unsigned char *)buf;
-    if (NAV_SNAPSHOT_MAGIC != get_u32(in)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    if (NAV_SNAPSHOT_VERSION != get_u32(in + 4)) {
-        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
-    }
-    uint32_t count = get_u32(in + 8);
-    in += 12;
-    size_t left = size - 12;
-    if ((uint32_t)nav->limit < count) {
-        return SHREWD_LV_VIEW_ERR_NAV_STACK_FULL;
-    }
-    nav_clear(nav);
-    if (SHREWD_LV_VIEW_ERR_OK != nav_reserve(nav, (size_t)count)) {
+    uint32_t count = get_u32(*in);
+    *in += 4;
+    *left -= 4;
+    if (SHREWD_LV_VIEW_ERR_OK != stack_reserve(stack, (size_t)count)) {
         return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
     }
     for (uint32_t i = 0; i < count; ++i) {
-        if (12 > left) {
+        if (12 > *left) {
             return SHREWD_LV_VIEW_ERR_ARG_INVALID;
         }
-        uint32_t seq = get_u32(in);
-        uint32_t name_len = get_u32(in + 4);
-        uint32_t params_size = get_u32(in + 8);
-        in += 12;
-        left -= 12;
-        if ((size_t)name_len + (size_t)params_size > left) {
+        uint32_t seq = get_u32(*in);
+        uint32_t name_len = get_u32(*in + 4);
+        uint32_t params_size = get_u32(*in + 8);
+        *in += 12;
+        *left -= 12;
+        if (((size_t)name_len + (size_t)params_size) > *left) {
             return SHREWD_LV_VIEW_ERR_ARG_INVALID;
         }
         char name[128];
         if (name_len >= sizeof(name)) {
             return SHREWD_LV_VIEW_ERR_ARG_INVALID;
         }
-        memcpy(name, in, name_len);
+        memcpy(name, *in, name_len);
         name[name_len] = '\0';
-        in += name_len;
-        left -= name_len;
+        *in += name_len;
+        *left -= name_len;
 
         shrewd_lv_view_page_t *page = nav_find_by_name(nav, name);
         if (NULL == page) {
             return SHREWD_LV_VIEW_ERR_NOT_FOUND;
         }
-        shrewd_lv_view_nav_entry_t *e = &nav->entries[nav->count];
+        shrewd_lv_view_nav_entry_t *e = &stack->entries[stack->count];
         memset(e, 0, sizeof(*e));
         e->page = page;
         e->seq = seq;
@@ -534,18 +652,55 @@ int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_
             if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_alloc(&slot, params_size)) {
                 return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
             }
-            memcpy(slot, in, params_size);
+            memcpy(slot, *in, params_size);
             e->params = slot;
             e->params_size = params_size;
         }
-        in += params_size;
-        left -= params_size;
-        nav->count += 1;
+        *in += params_size;
+        *left -= params_size;
+        stack->count += 1;
         if (nav->next_seq <= seq) {
             nav->next_seq = seq + 1;
         }
     }
-    /* 只激活栈顶:其余是描述,回退到它们时才建 widget(与释放策略一致)。 */
-    shrewd_lv_view_nav_entry_t *top = nav_top_entry(nav);
-    return (NULL != top) ? entry_activate(nav, top) : SHREWD_LV_VIEW_ERR_OK;
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+int shrewd_lv_view_nav_restore(shrewd_lv_view_nav_t *nav, const void *buf, size_t size) {
+    if ((NULL == nav) || (NULL == buf) || (16 > size)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    const unsigned char *in = (const unsigned char *)buf;
+    if (NAV_SNAPSHOT_MAGIC != get_u32(in)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (NAV_SNAPSHOT_VERSION != get_u32(in + 4)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    uint32_t branch_count = get_u32(in + 8);
+    uint32_t current = get_u32(in + 12);
+    in += 16;
+    size_t left = size - 16;
+    if ((SHREWD_LV_VIEW_NAV_BRANCHES < branch_count) || (branch_count <= current)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    for (size_t i = 0; i < nav->branch_count; ++i) {
+        stack_clear(&nav->branches[i]);
+    }
+    stack_clear(&nav->modal);
+    nav->branch_count = (size_t)branch_count;
+    nav->current = (size_t)current;
+    for (uint32_t i = 0; i < branch_count; ++i) {
+        int status = stack_snapshot_get(nav, &nav->branches[i], nav->host, &in, &left);
+        if (SHREWD_LV_VIEW_ERR_OK != status) {
+            return status;
+        }
+    }
+    int status = stack_snapshot_get(nav, &nav->modal, nav->modal_host, &in, &left);
+    if (SHREWD_LV_VIEW_ERR_OK != status) {
+        return status;
+    }
+    /* 只激活当前栈的栈顶:其余是描述,回退到它们时才建 widget(§6.5)。 */
+    shrewd_lv_view_nav_entry_t *top = stack_top(nav_active(nav));
+    return (NULL != top) ? entry_activate(nav_active_host(nav), top) : SHREWD_LV_VIEW_ERR_OK;
 }

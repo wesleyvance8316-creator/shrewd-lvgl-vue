@@ -71,4 +71,16 @@ target_link_libraries(shrewd-lv-view-restore
 
 add_test(NAME shrewd-lv-view.restore COMMAND shrewd-lv-view-restore)
 
+# 分支与模态栈的单测(architecture.md §6.9)。
+add_executable(shrewd-lv-view-branch
+        test_branch.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-branch
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.branch COMMAND shrewd-lv-view-branch)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

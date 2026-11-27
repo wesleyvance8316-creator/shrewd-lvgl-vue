@@ -91,7 +91,8 @@ static void page_init(test_page_t *p, const shrewd_lv_view_page_desc_t *desc) {
 static void test_four_stages(void) {
     printf("test_four_stages\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     test_page_t a;
@@ -122,7 +123,8 @@ static void test_four_stages(void) {
 static void test_release_policy(void) {
     printf("test_release_policy\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     /* a 常驻,b 离即销毁 —— 两者被覆盖时的行为应当不同。 */
@@ -152,7 +154,8 @@ static int pred_is_b(void *ctx, const shrewd_lv_view_page_t *page) {
 static void test_pop_until(void) {
     printf("test_pop_until\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
 
     test_page_t home;
@@ -180,7 +183,8 @@ static void test_pop_until(void) {
 static void test_stack_limit(void) {
     printf("test_stack_limit\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 2),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 2),
           "nav_init limit=2");
 
     test_page_t a;
@@ -215,7 +219,8 @@ static shrewd_lv_view_guard_result_t test_guard(void *ctx, shrewd_lv_view_nav_re
 static void test_guard_results(void) {
     printf("test_guard_results\n");
     shrewd_lv_view_nav_t nav;
-    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_nav_init(&nav, lv_screen_active(), 0),
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_nav_init(&nav, lv_screen_active(), lv_layer_top(), 0),
           "nav_init");
     shrewd_lv_view_nav_set_guard(&nav, test_guard, NULL);
 

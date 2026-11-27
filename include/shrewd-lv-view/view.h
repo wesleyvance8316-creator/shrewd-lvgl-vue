@@ -145,15 +145,31 @@ typedef struct shrewd_lv_view_nav_entry {
     int built; /**< widget 树是否已建 */
 } shrewd_lv_view_nav_entry_t;
 
-/** 默认栈深上限:安全底线,不是语义(architecture.md §6.6)。 */
-#define SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT 32
-
-/** 导航栈。 */
-typedef struct shrewd_lv_view_nav {
-    lv_obj_t *host;
+/** 一个栈:分支或模态各一份。 */
+typedef struct shrewd_lv_view_nav_stack {
     shrewd_lv_view_nav_entry_t *entries;
     size_t count;
     size_t capacity;
+} shrewd_lv_view_nav_stack_t;
+
+/** 默认栈深上限:安全底线,不是语义(architecture.md §6.6)。 */
+#define SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT 32
+
+/** 分支数上限(tab 数)。 */
+#define SHREWD_LV_VIEW_NAV_BRANCHES 8
+
+/**
+ * 导航:**分层的栈**(architecture.md §6.9)。
+ *
+ *   - **分支**:tab 各持独立栈,`switch_branch` 换分支、不产生历史;
+ *   - **模态**:独立的一层,叠在 LVGL top layer 上。
+ *
+ * 操作集只有一套,作用在**当前栈**上:模态栈非空时是它,否则是当前分支。
+ * 这样模态天然叠在最上、还能嵌套。
+ */
+typedef struct shrewd_lv_view_nav {
+    lv_obj_t *host;       /**< 分支页的容器(壳的内容区) */
+    lv_obj_t *modal_host; /**< 模态页的容器(LVGL top layer) */
     size_t limit;
     uint32_t next_seq;
     shrewd_lv_view_guard_fn guard;
@@ -163,24 +179,55 @@ typedef struct shrewd_lv_view_nav {
     shrewd_lv_view_page_t **registry;
     size_t registry_count;
     size_t registry_capacity;
+    shrewd_lv_view_nav_stack_t branches[SHREWD_LV_VIEW_NAV_BRANCHES];
+    size_t branch_count;
+    size_t current;
+    shrewd_lv_view_nav_stack_t modal;
 } shrewd_lv_view_nav_t;
 
-/** 初始化导航栈,@p host 是页面容器。@p limit 0 表示用默认上限。 */
-int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav, lv_obj_t *host, size_t limit);
+/**
+ * 初始化导航。@p host 是分支页的容器,@p modal_host 是模态页的容器
+ * (通常 `lv_display_get_layer_top()`)。@p limit 0 表示用默认上限。
+ */
+int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav,
+                            lv_obj_t *host,
+                            lv_obj_t *modal_host,
+                            size_t limit);
 
-/** 释放导航栈(含未销毁的 widget 树与参数副本)。 */
+/** 释放导航(含未销毁的 widget 树与参数副本)。 */
 void shrewd_lv_view_nav_dispose(shrewd_lv_view_nav_t *nav);
 
 void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *nav,
                                   shrewd_lv_view_guard_fn guard,
                                   void *ctx);
 
-/** 前进。@p params 拷进栈条目。 */
+/**
+ * 登记页面,让 `name -> 实例` 可查。**恢复要用** —— 快照里只有 name,
+ * 必须能找回实例。push 会顺带登记;启动时把所有可恢复的页面登记一次即可。
+ */
+int shrewd_lv_view_nav_register(shrewd_lv_view_nav_t *nav, shrewd_lv_view_page_t *page);
+
+/**
+ * 切换当前分支(不产生历史,architecture.md §6.9)。
+ * @p branch 从 0 起;分支会按需登记。
+ */
+int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *nav, size_t branch);
+
+/** 前进。@p params 拷进栈条目。作用在当前栈。 */
 int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
                             shrewd_lv_view_page_t *page,
                             const void *params);
 
-/** 返回一层。 */
+/**
+ * 打开模态:压进**模态栈**。模态栈初始为空,push 进不去它,所以"打开模态"
+ * 是一个独立操作(architecture.md §6.9)。此后 push/pop 都作用在模态栈上
+ * (可嵌套);关完最后一层即回到分支。
+ */
+int shrewd_lv_view_nav_modal_push(shrewd_lv_view_nav_t *nav,
+                                  shrewd_lv_view_page_t *page,
+                                  const void *params);
+
+/** 返回一层。作用在当前栈。 */
 int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *nav);
 
 /** 按谓词连续 pop,中间逐个 exit + 按策略销毁。 */
@@ -188,15 +235,19 @@ int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
                                  shrewd_lv_view_nav_pred_fn pred,
                                  void *ctx);
 
-/** 同级跳转 / tab 切换:不产生历史。 */
+/** 同级跳转:不产生历史。作用在当前栈。 */
 int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
                                shrewd_lv_view_page_t *page,
                                const void *params);
 
-/** 栈顶;空栈返回 NULL。 */
+/** 当前栈的栈顶;空栈返回 NULL。 */
 shrewd_lv_view_page_t *shrewd_lv_view_nav_top(shrewd_lv_view_nav_t *nav);
 
+/** 当前栈的深度。 */
 size_t shrewd_lv_view_nav_depth(const shrewd_lv_view_nav_t *nav);
+
+/** 当前栈是否是模态栈。 */
+int shrewd_lv_view_nav_in_modal(const shrewd_lv_view_nav_t *nav);
 
 /**
  * 登记页面,让 `name -> 实例` 可查。**恢复要用** —— 快照里只有 name,
