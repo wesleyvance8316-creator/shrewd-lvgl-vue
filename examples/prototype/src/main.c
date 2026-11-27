@@ -47,9 +47,13 @@ int main(void) {
     }
 
     /* 2.5 壳:标题栏 + 底栏 + 内容区(architecture.md §6.9)。
-     *     标题栏显当前页名 —— 是 nav 状态的绑定,不是手动同步。 */
+     *     标题栏显当前页名、底栏高亮当前 tab —— 都是 nav 状态的绑定,不手动同步。 */
     static shrewd_lv_view_shell_t shell;
     if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_shell_create(&shell, disp, &app.nav, 32, 24)) {
+        return 1;
+    }
+    if ((SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_shell_add_tab(&shell, "设备"))
+        || (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_shell_add_tab(&shell, "设置"))) {
         return 1;
     }
 
@@ -69,6 +73,17 @@ int main(void) {
     shrewd_lv_view_app_set_bridge(&app, &bridge);
     (void)feed_start(&bridge, &devices[1]);
 
+    /* 5. 两个分支各持独立栈(§6.9):分支 0 设备流(首页→详情),分支 1 设置。
+     *    先在分支 1 放好设置页,再切回分支 0 —— 栈互不干扰,tab 切换不产生历史。 */
+    if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_nav_switch_branch(&app.nav, 1)) {
+        return 1;
+    }
+    if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_nav_push(&app.nav, &settings.base, NULL)) {
+        return 1;
+    }
+    if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_nav_switch_branch(&app.nav, 0)) {
+        return 1;
+    }
     if (SHREWD_LV_VIEW_ERR_OK != shrewd_lv_view_app_mount(&app, &home.base, NULL)) {
         return 1;
     }
@@ -83,6 +98,13 @@ int main(void) {
         }
         if (100 == tick) {
             (void)shrewd_lv_view_nav_pop(&app.nav);
+        }
+        /* 演示 tab:切到设置,底栏高亮自动跟;再切回来,设备栈原样还在 */
+        if (150 == tick) {
+            (void)shrewd_lv_view_nav_switch_branch(&app.nav, 1);
+        }
+        if (175 == tick) {
+            (void)shrewd_lv_view_nav_switch_branch(&app.nav, 0);
         }
     }
 

@@ -53,12 +53,13 @@ int shrewd_lv_view_shell_create(shrewd_lv_view_shell_t *shell,
     lv_obj_set_style_pad_all(shell->content, 0, 0);
     lv_obj_set_style_border_width(shell->content, 0, 0);
 
-    /* 底栏:持久。0 高度表示不要。 */
+    /* 底栏:持久。0 高度表示不要。子项横排,正好是 tab 栏。 */
     if (0 < footer_height) {
         shell->footer = lv_obj_create(shell->root);
         lv_obj_set_size(shell->footer, w, footer_height);
         lv_obj_set_style_pad_all(shell->footer, 0, 0);
         lv_obj_set_style_border_width(shell->footer, 0, 0);
+        lv_obj_set_flex_flow(shell->footer, LV_FLEX_FLOW_ROW);
     }
 
     /* 壳的 UI 是导航状态的绑定 —— 标题栏不用手动同步。 */
@@ -68,5 +69,49 @@ int shrewd_lv_view_shell_create(shrewd_lv_view_shell_t *shell,
     }
     /* 导航的页面容器就是内容区。 */
     nav->host = shell->content;
+    /* add_tab 要靠它切分支。 */
+    shell->nav = nav;
+    return SHREWD_LV_VIEW_ERR_OK;
+}
+
+/** tab 按钮被点:切到它对应的分支。index 从"是第几个子项"来。 */
+static void shell_tab_clicked(lv_event_t *e) {
+    shrewd_lv_view_shell_t *shell = (shrewd_lv_view_shell_t *)lv_event_get_user_data(e);
+    lv_obj_t *btn = lv_event_get_current_target_obj(e);
+    int32_t index = lv_obj_get_index(btn);
+    if ((NULL == shell) || (NULL == shell->nav) || (0 > index)) {
+        return;
+    }
+    (void)shrewd_lv_view_nav_switch_branch(shell->nav, (size_t)index);
+}
+
+int shrewd_lv_view_shell_add_tab(shrewd_lv_view_shell_t *shell, const char *label) {
+    if ((NULL == shell) || (NULL == shell->footer) || (NULL == shell->nav) || (NULL == label)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (SHREWD_LV_VIEW_NAV_BRANCHES <= shell->tab_count) {
+        return SHREWD_LV_VIEW_ERR_FULL;
+    }
+    lv_obj_t *btn = lv_button_create(shell->footer);
+    if (NULL == btn) {
+        return SHREWD_LV_VIEW_ERR_MEM_NOMEM; /* LVGL 没有错误码,只能自己起名(§12) */
+    }
+    lv_obj_t *text = lv_label_create(btn);
+    if (NULL == text) {
+        lv_obj_delete(btn);
+        return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+    }
+    lv_label_set_text(text, label);
+    lv_obj_center(text);
+    lv_obj_add_event_cb(btn, shell_tab_clicked, LV_EVENT_CLICKED, shell);
+
+    /* 高亮是个绑定,不是手动同步:只绑一次,底栏的子项按分支顺序 = tab。 */
+    if (0 == shell->tab_count) {
+        int status = shrewd_lv_view_bind_tab_bar(shell->footer, &shell->nav->current_branch);
+        if (SHREWD_LV_VIEW_ERR_OK != status) {
+            return status;
+        }
+    }
+    shell->tab_count += 1;
     return SHREWD_LV_VIEW_ERR_OK;
 }

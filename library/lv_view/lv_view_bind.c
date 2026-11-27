@@ -165,3 +165,40 @@ static const shrewd_lv_view_target_t g_textarea_text = {
 int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref) {
     return shrewd_lv_view_bind(obj, &g_textarea_text, ref);
 }
+
+/* --- tab 栏:高亮当前分支(architecture.md §6.9)---------------------- */
+
+/**
+ * bar 的**直接子项按分支顺序排列**;第 i 个子项在 `*value == i` 时进
+ * `LV_STATE_CHECKED`,否则摘掉。**样式交给主题** —— 框架只表达"谁是当前",
+ * 不决定它长什么样(design.md §7.6)。
+ */
+static void tab_bar_write(void *obj, const void *value, size_t size) {
+    lv_obj_t *bar = (lv_obj_t *)obj;
+    if (sizeof(uint32_t) != size) {
+        return;
+    }
+    uint32_t active = *(const uint32_t *)value;
+    uint32_t n = lv_obj_get_child_count(bar);
+    for (uint32_t i = 0; i < n; ++i) {
+        lv_obj_t *child = lv_obj_get_child(bar, (int32_t)i);
+        if (NULL == child) {
+            continue;
+        }
+        if (i == active) {
+            lv_obj_add_state(child, LV_STATE_CHECKED);
+        } else {
+            lv_obj_remove_state(child, LV_STATE_CHECKED);
+        }
+    }
+}
+
+static const shrewd_lv_view_target_t g_tab_bar = {
+    .write = tab_bar_write,
+    .read = NULL,
+    .changed_event = 0,
+};
+
+int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref) {
+    return shrewd_lv_view_bind(bar, &g_tab_bar, ref);
+}

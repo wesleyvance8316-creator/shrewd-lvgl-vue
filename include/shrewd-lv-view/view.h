@@ -362,6 +362,8 @@ typedef struct shrewd_lv_view_shell {
     lv_obj_t *title;   /**< 标题栏的文本,绑 nav->current_name */
     lv_obj_t *content; /**< 页面容器 = nav->host */
     lv_obj_t *footer;
+    shrewd_lv_view_nav_t *nav; /**< 壳的 UI 是它的绑定(§6.9) */
+    uint32_t tab_count;        /**< 已加的 tab 数,即下一个 tab 的分支号 */
 } shrewd_lv_view_shell_t;
 
 /**
@@ -373,6 +375,14 @@ int shrewd_lv_view_shell_create(shrewd_lv_view_shell_t *shell,
                                 shrewd_lv_view_nav_t *nav,
                                 int32_t header_height,
                                 int32_t footer_height);
+
+/**
+ * 往底栏加一个 tab:建按钮、点它切分支、高亮跟 `nav->current_branch`。
+ *
+ * 第 n 次调用对应**分支 n**。高亮是一个绑定(`bind_tab_bar`),不是手动同步。
+ * 需要建壳时给了底栏(`footer_height > 0`),且 @p shell 活得比它的 widget 久。
+ */
+int shrewd_lv_view_shell_add_tab(shrewd_lv_view_shell_t *shell, const char *label);
 
 /*
  * ==========================================================================
@@ -415,6 +425,15 @@ int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *
 
 /** textarea 的文本:双向(v-model)。ref 槽位是 `char[N]`。 */
 int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+
+/**
+ * tab 栏的高亮(architecture.md §6.9)。ref 槽位是 `uint32_t`
+ * (`nav->current_branch` 正是它)。
+ *
+ * 约定:bar 的**直接子项按分支顺序排列**,第 i 个子项在当前分支是 i 时进
+ * `LV_STATE_CHECKED`。**样式交给主题** —— 框架只表达"谁是当前"。
+ */
+int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref);
 
 /*
  * ==========================================================================

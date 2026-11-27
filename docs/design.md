@@ -174,6 +174,7 @@ int shrewd_lv_view_bind(void *obj,
 int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
 int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
 int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *ref);
+int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref);
 ```
 
 - `write` 为 NULL 的 target 不合法;`read` 为 NULL 即**单向**;`read` 非 NULL 即**双向**,
@@ -968,7 +969,18 @@ C9 facade(三档)。
 `error_name` 认本仓的其余回落。原稿写的 `-600..-699` 作废 —— 那正好是 basic 第 6
 个模块的块;改用 `-0x6000..-0x6fff`。**无需改动 shrewd-basic**。
 
-**下一步(不是待决,是未做)**:
+**底栏 tab 高亮**也已实现(architecture.md §6.9「底栏高亮当前 tab,全是绑定」)。
+两层:
 
-1. **底栏的 tab 高亮** —— 壳已给 `nav->current_branch` 这个可绑定 ref,底栏的
-   tab 高亮是它的一个绑定;需要一个 target 或留给应用自己写。
+- **机制** `bind_tab_bar`:bar 的**直接子项按分支顺序排列**,第 i 个在
+  `current_branch == i` 时进 `LV_STATE_CHECKED` —— **样式交给主题**,框架只表达
+  "谁是当前"(§7.6);
+- **便捷** `shell_add_tab`:建按钮 + 点击切分支 + 高亮跟上,一行一个 tab。
+
+**至此 §15 的清单清空。** 已落地:依赖与构建、绑定机制(含 v-model 与回路抑制)、
+组件模型、列表对账、跨线程桥 + sb_dbus 合流、导航栈(四阶段/释放策略/守卫/
+`pop_until`/`remove_until`)、栈恢复、分支与模态、壳(标题栏 + 底栏 tab)、脚手架、
+真实页面原型、跨仓约定。11 个单测全绿。
+
+**再往下是打磨,不是补齐**:组件生态的三档 facade(§7.7)、主题接线(§7.6)、
+props/事件/组件级 v-model(§7.4)—— 那些要等有真实组件需求再动,免得凭空设计。
