@@ -34,4 +34,17 @@ target_link_libraries(shrewd-lv-view-bind
 
 add_test(NAME shrewd-lv-view.bind COMMAND shrewd-lv-view-bind)
 
+# 组件模型的单测:demo_card 就是样板本身(design.md §7.2)。
+add_executable(shrewd-lv-view-component
+        test_component.c
+        demo_card.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-component
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.component COMMAND shrewd-lv-view-component)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.
