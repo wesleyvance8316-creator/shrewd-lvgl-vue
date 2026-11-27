@@ -3,24 +3,12 @@
  * @brief 真实页面原型:把六件机制都用上,倒推 API 手感。
  */
 #include <stdio.h>
-#include <time.h>
 #include <unistd.h>
 
 #include "feed.h"
 #include "views/views.h"
 
 #define DEVICES 4
-
-/*
- * ★ API 摩擦点:框架不提供 tick 源,真实应用必须自己给一个
- * (无头夹具里有 lv_tick_set_cb,但生产代码没有)。没有它 lv_tick_get() 恒为 0,
- * lv_timer_handler() 里的定时器永不推进 —— 实测会挂住。
- */
-static uint32_t now_ms(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint32_t)((ts.tv_sec * 1000u) + (uint32_t)(ts.tv_nsec / 1000000));
-}
 
 /*
  * ★ 踩坑记录:display **必须**有 flush 回调。没有它 lv_timer_handler() 会转
@@ -45,7 +33,7 @@ int main(void) {
     }
 
     /* 2. 装配 */
-    lv_tick_set_cb(now_ms);
+    /* tick 源交给 app_init 的默认实现(design.md §14.1 摩擦点 2 已修) */
     lv_init();
     lv_display_t *disp = lv_display_create(480, 320);
     lv_display_set_flush_cb(disp, disp_flush);

@@ -37,19 +37,19 @@ static uint32_t src_key(void *ctx, uint32_t i) {
     return (uint32_t)g_items[i];
 }
 
-static lv_obj_t *src_build(void *ctx, lv_obj_t *container, const void *item) {
+static lv_obj_t *src_build(void *ctx, lv_obj_t *container, const void *item, void *instance) {
     (void)ctx;
     (void)item;
+    (void)instance;
     g_build_calls += 1;
     lv_obj_t *child = lv_obj_create(container);
     lv_obj_set_size(child, 40, 10);
     return child;
 }
 
-static void src_teardown(void *ctx, lv_obj_t *root, const void *item) {
+static void src_teardown(void *ctx, void *instance) {
     (void)ctx;
-    (void)root;
-    (void)item;
+    (void)instance;
     g_teardown_calls += 1;
 }
 
@@ -57,6 +57,7 @@ static const shrewd_lv_view_list_desc_t g_desc = {
     .at = src_at,
     .key = src_key,
     .item_size = sizeof(int32_t),
+    .instance_size = 0,
     .build = src_build,
     .teardown = src_teardown,
 };
@@ -161,7 +162,67 @@ static void test_conditional(void) {
     check(0 == lv_obj_get_child_count(container), "no children");
 }
 
-/* --- 4. 容器删除级联自清 -------------------------------------------- */
+/* --- 4. 子项实例由框架分配(design.md §14.1 摩擦点 1)---------------- */
+
+typedef struct {
+    lv_obj_t *root;
+    int marker;
+} inst_t;
+
+static lv_obj_t *inst_build(void *ctx, lv_obj_t *container, const void *item, void *instance) {
+    (void)ctx;
+    (void)item;
+    inst_t *t = (inst_t *)instance;
+    if (NULL == t) {
+        return NULL; /* 框架没给实例 —— 立刻暴露 */
+    }
+    t->marker = 4242;
+    t->root = lv_obj_create(container);
+    lv_obj_set_user_data(t->root, t);
+    return t->root;
+}
+
+static void inst_teardown(void *ctx, void *instance) {
+    (void)ctx;
+    inst_t *t = (inst_t *)instance;
+    if ((NULL != t) && (4242 == t->marker)) {
+        g_teardown_calls += 1; /* 收到的确实是自己的实例 */
+    }
+}
+
+static const shrewd_lv_view_list_desc_t inst_desc = {
+    .at = src_at,
+    .key = src_key,
+    .item_size = sizeof(int32_t),
+    .instance_size = sizeof(inst_t),
+    .build = inst_build,
+    .teardown = inst_teardown,
+};
+
+static void test_instance_owned(void) {
+    printf("test_instance_owned\n");
+    lv_obj_t *container = lv_obj_create(lv_screen_active());
+
+    shrewd_lv_view_list_t slot;
+    memset(&slot, 0, sizeof(slot));
+    shrewd_basic_reflect_ref_t ref;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&ref, &slot, sizeof(slot)),
+          "ref_init");
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_bind_list(container, &ref, &inst_desc, NULL),
+          "bind_list");
+    reset_counters();
+
+    static const int32_t two[2] = {1, 2};
+    set_list(&ref, &slot, two, 2);
+    check(2 == lv_obj_get_child_count(container), "2 children with instances");
+
+    /* 收尾:框架应把实例交给 teardown 再释放。 */
+    static const int32_t none[1] = {0};
+    set_list(&ref, &slot, none, 0);
+    check(2 == g_teardown_calls, "teardown got its own instance for both");
+}
+
+/* --- 5. 容器删除级联自清 -------------------------------------------- */
 
 static void test_container_delete(void) {
     printf("test_container_delete\n");
@@ -189,6 +250,7 @@ int main(void) {
     test_add_remove_reuse();
     test_reorder();
     test_conditional();
+    test_instance_owned();
     test_container_delete();
     if (0 == g_fail) {
         printf("test_list: ok\n");

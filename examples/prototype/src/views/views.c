@@ -5,7 +5,6 @@
 
 #include <stdio.h>
 
-#include "shrewd-basic/platform/memory.h"
 #include <string.h>
 
 #include "components/device_card/device_card.h"
@@ -28,41 +27,30 @@ static uint32_t home_key(void *ctx, uint32_t i) {
 }
 
 /*
- * ★ API 摩擦点(design.md §10.3 的反例):
- *   组件实例本该"调用方内嵌"(§7.2),但**列表子项是动态的,调用方无法预先持有**。
- *   这里只好自己分配 card、并把它塞进 widget 的 user_data,teardown 再取回释放。
- *   若框架给子项一个归属槽,这层记账就没了。
+ * 子项实例由框架分配(instance_size),build 直接用 —— 不再自己 calloc /
+ * 塞 user_data / teardown 取回(design.md §14.1 摩擦点 1 已修)。
  */
-static lv_obj_t *home_build(void *ctx, lv_obj_t *container, const void *item) {
+static lv_obj_t *home_build(void *ctx, lv_obj_t *container, const void *item, void *instance) {
     (void)ctx;
     device_t *d = (device_t *)item;
-    void *slot = NULL;
-    if (SHREWD_BASIC_ERR_OK != shrewd_basic_platform_calloc(&slot, 1, sizeof(device_card_t))) {
-        return NULL;
-    }
-    device_card_t *c = (device_card_t *)slot;
+    device_card_t *c = (device_card_t *)instance;
     if (SHREWD_LV_VIEW_ERR_OK != device_card_create(c, container, d)) {
-        (void)shrewd_basic_platform_free(&slot);
         return NULL;
     }
-    lv_obj_set_user_data(c->root, c); /* 取回用 */
     return c->root;
 }
 
-static void home_teardown(void *ctx, lv_obj_t *root, const void *item) {
+static void home_teardown(void *ctx, void *instance) {
     (void)ctx;
-    (void)item;
-    device_card_t *c = (device_card_t *)lv_obj_get_user_data(root);
-    if (NULL != c) {
-        void *slot = c;
-        (void)shrewd_basic_platform_free(&slot);
-    }
+    (void)instance;
+    /* 绑定随 widget 自清;实例由框架释放。 */
 }
 
 static const shrewd_lv_view_list_desc_t home_list_desc = {
     .at = home_at,
     .key = home_key,
     .item_size = sizeof(device_t *),
+    .instance_size = sizeof(device_card_t),
     .build = home_build,
     .teardown = home_teardown,
 };

@@ -855,10 +855,13 @@ LVGL 有 `lv_obj_move_to_index(obj, index)` 与 `lv_obj_swap(a, b)`(已确认),�
 
 | # | 摩擦 | 现状 | 建议 |
 |---|---|---|---|
-| **1** | **列表子项的组件实例没有归属** | §10.3 说"`item_ctx` 不需要",但**真组件有实例结构**,而子项是动态的、调用方无法预先持有。原型里只好自己 `calloc` card、塞进 `lv_obj_set_user_data`、teardown 再取回释放 | 给子项一个**归属槽**(`desc->instance_size`),框架分配并传给 `build` —— 照 `lv_fragment` 的形态 |
-| **2** | **框架不提供 tick 源** | 真实应用必须自己写 `lv_tick_set_cb`;没写则 `lv_tick_get()` 恒 0、`lv_timer_handler` 里定时器永不推进 | `app_init` 内置一个默认 tick(可被覆盖) |
+| **1** | **列表子项的组件实例没有归属** | §10.3 说"`item_ctx` 不需要",但**真组件有实例结构**,而子项是动态的、调用方无法预先持有。**已修**:加 `desc->instance_size`,框架分配、传给 `build`、销毁时释放(照 `lv_fragment` 的形态) | ✅ |
+| **2** | **框架不提供 tick 源** | **已修**:`app_init` 检测 `lv_tick_get_cb()`,空则装默认时钟,可被覆盖 | ✅ |
 | **3** | **display 必须有 flush 回调** | 没有它 `lv_timer_handler()` **转不出来**(实测挂死在第 0 个 tick)。手写 `main.c` 时最容易漏 | 脚手架已有;原型手写时踩了。文档记一笔 |
 | **4** | **include 路径约定** | 一目录一组件 → `views/views.h`、`components/device_card/device_card.h`,手写容易忘 | 统一约定写进 §9.4 |
+
+> **第 1、2 条已修**(测试 + 原型都验过):`test_list.c` 的 `test_instance_owned`
+> 证明框架分配的实例会送到 `build`/`teardown`;原型删掉手写 tick 后仍跑通。
 
 #### 顺手的地方(不用改)
 

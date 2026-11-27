@@ -8,7 +8,10 @@
  * lives.
  */
 
+#define _POSIX_C_SOURCE 200809L
+
 #include <string.h>
+#include <time.h>
 
 #include "shrewd-lv-view/view.h"
 
@@ -39,7 +42,21 @@ const char *shrewd_lv_view_error_name(int code) {
     return shrewd_basic_error_name(code);
 }
 
+/**
+ * 默认 tick 源。**没有 tick 源 lv_timer_handler() 里定时器永不推进** —— 实测
+ * 会挂在第一个 tick(design.md §14.1 摩擦点 2)。调用方可在此前
+ * `lv_tick_set_cb()` 覆盖。
+ */
+static uint32_t app_default_tick(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((ts.tv_sec * 1000u) + (uint32_t)(ts.tv_nsec / 1000000));
+}
+
 int shrewd_lv_view_app_init(shrewd_lv_view_app_t *app, lv_display_t *display) {
+    if (NULL == lv_tick_get_cb()) {
+        lv_tick_set_cb(app_default_tick);
+    }
     if (NULL == app) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }

@@ -378,10 +378,25 @@ typedef struct shrewd_lv_view_list_desc {
     uint32_t (*key)(void *ctx, uint32_t i);
     size_t item_size;
 
-    /** 建子项,返回它的 root widget。**只跑一次**。 */
-    lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item);
-    /** 拆子项,可选(NULL = 就删 widget,绑定按 design.md §3 自清)。 */
-    void (*teardown)(void *ctx, lv_obj_t *root, const void *item);
+    /**
+     * 子项实例的宽度。**0 = 无实例**。
+     *
+     * 组件本该"调用方内嵌"(design.md §7.2),但列表子项是动态的、调用方无法
+     * 预先持有 —— 所以框架按这个宽度分配、传给 build、销毁时释放(照
+     * lv_fragment 的 instance_size 形态)。这让 §14.1 摩擦点 1 的记账消失。
+     */
+    size_t instance_size;
+
+    /**
+     * 建子项,返回它的 root widget。**只跑一次**。
+     * @p instance 是框架分配的实例(instance_size 为 0 时是 NULL)。
+     */
+    lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item, void *instance);
+    /**
+     * 拆子项前的收尾,可选。框架随后删 widget、释放 instance。
+     * 绑定随 widget 自清(design.md §3),这里不用手动解绑。
+     */
+    void (*teardown)(void *ctx, void *instance);
 } shrewd_lv_view_list_desc_t;
 
 /**
@@ -392,6 +407,9 @@ typedef struct shrewd_lv_view_list_desc {
  *   - 子项的数据结构里要含 ref,否则内容变化反映不出来。
  *
  * 容器**只放列表子项**(顺序按 index 对齐)。
+ *
+ * **子项实例由框架管理**:声明 `instance_size`,框架分配、传给 `build`、
+ * 子项销毁时释放 —— 使用者不碰 `calloc`/`free`。
  */
 int shrewd_lv_view_bind_list(lv_obj_t *container,
                              shrewd_basic_reflect_ref_t *source,
