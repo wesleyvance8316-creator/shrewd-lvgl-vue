@@ -47,4 +47,16 @@ target_link_libraries(shrewd-lv-view-component
 
 add_test(NAME shrewd-lv-view.component COMMAND shrewd-lv-view-component)
 
+# 导航栈的单测:四阶段、释放策略、pop_until、上限、守卫(design.md §8)。
+add_executable(shrewd-lv-view-nav
+        test_nav.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-nav
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.nav COMMAND shrewd-lv-view-nav)
+
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

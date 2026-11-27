@@ -62,7 +62,7 @@ int shrewd_lv_view_app_init(shrewd_lv_view_app_t *app, lv_display_t *display) {
     lv_obj_set_size(app->host,
                     lv_display_get_horizontal_resolution(app->display),
                     lv_display_get_vertical_resolution(app->display));
-    return SHREWD_LV_VIEW_ERR_OK;
+    return shrewd_lv_view_nav_init(&app->nav, app->host, SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT);
 }
 
 int shrewd_lv_view_app_use(shrewd_lv_view_app_t *app, const shrewd_lv_view_plugin_t *plugin) {
@@ -84,34 +84,11 @@ int shrewd_lv_view_app_use(shrewd_lv_view_app_t *app, const shrewd_lv_view_plugi
 int shrewd_lv_view_app_mount(shrewd_lv_view_app_t *app,
                              shrewd_lv_view_page_t *page,
                              const void *params) {
-    if ((NULL == app) || (NULL == page) || (NULL == page->desc) || (NULL == app->host)) {
+    if ((NULL == app) || (NULL == page) || (NULL == page->desc)) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
-    if (NULL != app->mounted) {
-        if (NULL != app->mounted->desc->exit) {
-            app->mounted->desc->exit(app->mounted);
-        }
-        if (NULL != app->mounted->desc->destroy) {
-            app->mounted->desc->destroy(app->mounted);
-        }
-        if (NULL != app->mounted->root) {
-            lv_obj_delete(app->mounted->root);
-            app->mounted->root = NULL;
-        }
-        app->mounted = NULL;
-    }
-    int status = page->desc->create(page, app->host, params);
-    if (SHREWD_LV_VIEW_ERR_OK != status) {
-        return status;
-    }
-    if (NULL != page->desc->enter) {
-        status = page->desc->enter(page);
-        if (SHREWD_LV_VIEW_ERR_OK != status) {
-            return status;
-        }
-    }
-    app->mounted = page;
-    return SHREWD_LV_VIEW_ERR_OK;
+    /* 挂载 = 压进导航栈。四阶段由栈驱动(architecture.md §6.2)。 */
+    return shrewd_lv_view_nav_push(&app->nav, page, params);
 }
 
 int shrewd_lv_view_app_step(shrewd_lv_view_app_t *app) {

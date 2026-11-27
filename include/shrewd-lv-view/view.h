@@ -19,6 +19,7 @@
 
 #include "lvgl/lvgl.h"
 #include "shrewd-basic/reflect/react.h"
+#include "shrewd-basic/reflect/reflect.h"
 
 /** Library version string (SemVer; 0.x = API free to change). */
 #define SHREWD_LV_VIEW_VERSION_STRING "0.1.0"
@@ -85,9 +86,21 @@ typedef struct shrewd_lv_view_page {
  * (docs/design.md §8.1): the four-stage hooks are the same set that a
  * plain fragment uses.
  */
+/**
+ * 释放策略(architecture.md §6.5):管的是 **widget 树**,不是实例
+ * (实例调用方持有、永久,design.md §8.3)。
+ */
+typedef enum shrewd_lv_view_release {
+    SHREWD_LV_VIEW_RELEASE_RESIDENT = 0,    /**< 建一次不销毁 */
+    SHREWD_LV_VIEW_RELEASE_DESTROY_ON_EXIT, /**< 失活即销毁(默认) */
+    SHREWD_LV_VIEW_RELEASE_CACHE            /**< 缓存 cache_count 个 */
+} shrewd_lv_view_release_t;
+
 struct shrewd_lv_view_page_desc {
-    const char *name;       /**< identity; serialized on restore, so a string */
-    const void *param_type; /**< reflect type of params (docs/design.md §8.2) */
+    const char *name; /**< identity; serialized on restore, so a string */
+    const shrewd_basic_reflect_type_t *param_type; /**< params 的 reflect 描述 */
+    shrewd_lv_view_release_t release;
+    size_t cache_count; /**< 仅 RELEASE_CACHE 用 */
 
     /** Create the widget tree and bind. @p params is the stack entry's copy. */
     int (*create)(shrewd_lv_view_page_t *p, lv_obj_t *container, const void *params);
@@ -99,13 +112,94 @@ struct shrewd_lv_view_page_desc {
     void (*destroy)(shrewd_lv_view_page_t *p);
 };
 
+/* --- 导航(architecture.md §6.6–6.7 / design.md §8.4–8.5)-------------- */
+
+/** 守卫结果。 */
+typedef enum shrewd_lv_view_guard_result {
+    SHREWD_LV_VIEW_GUARD_ALLOW = 0,
+    SHREWD_LV_VIEW_GUARD_CANCEL,
+    SHREWD_LV_VIEW_GUARD_REDIRECT,
+    SHREWD_LV_VIEW_GUARD_CONSUME /**< 请求被吃掉,不真走("再按一次退出") */
+} shrewd_lv_view_guard_result_t;
+
+/** 一次导航请求:守卫看 to/from,填 redirect 即改道。 */
+typedef struct shrewd_lv_view_nav_request {
+    const shrewd_lv_view_page_desc_t *to;
+    const shrewd_lv_view_page_desc_t *from;
+    shrewd_lv_view_page_t *redirect; /**< 守卫填它即改道 */
+} shrewd_lv_view_nav_request_t;
+
+typedef shrewd_lv_view_guard_result_t (*shrewd_lv_view_guard_fn)(void *ctx,
+                                                                 shrewd_lv_view_nav_request_t *req);
+
+/** 谓词:从栈顶往下找第一个满足的(architecture.md §6.6)。 */
+typedef int (*shrewd_lv_view_nav_pred_fn)(void *ctx, const shrewd_lv_view_page_t *page);
+
+/** 栈条目:描述,不持 widget(architecture.md §6.6)。 */
+typedef struct shrewd_lv_view_nav_entry {
+    shrewd_lv_view_page_t *page;
+    void *params; /**< 副本,可序列化(§6.11 Q2) */
+    size_t params_size;
+    uint32_t seq; /**< 区分同页面多次出现(§6.11 Q4) */
+    uint64_t entered_at;
+    int built; /**< widget 树是否已建 */
+} shrewd_lv_view_nav_entry_t;
+
+/** 默认栈深上限:安全底线,不是语义(architecture.md §6.6)。 */
+#define SHREWD_LV_VIEW_NAV_DEFAULT_LIMIT 32
+
+/** 导航栈。 */
+typedef struct shrewd_lv_view_nav {
+    lv_obj_t *host;
+    shrewd_lv_view_nav_entry_t *entries;
+    size_t count;
+    size_t capacity;
+    size_t limit;
+    uint32_t next_seq;
+    shrewd_lv_view_guard_fn guard;
+    void *guard_ctx;
+} shrewd_lv_view_nav_t;
+
+/** 初始化导航栈,@p host 是页面容器。@p limit 0 表示用默认上限。 */
+int shrewd_lv_view_nav_init(shrewd_lv_view_nav_t *nav, lv_obj_t *host, size_t limit);
+
+/** 释放导航栈(含未销毁的 widget 树与参数副本)。 */
+void shrewd_lv_view_nav_dispose(shrewd_lv_view_nav_t *nav);
+
+void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *nav,
+                                  shrewd_lv_view_guard_fn guard,
+                                  void *ctx);
+
+/** 前进。@p params 拷进栈条目。 */
+int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *nav,
+                            shrewd_lv_view_page_t *page,
+                            const void *params);
+
+/** 返回一层。 */
+int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *nav);
+
+/** 按谓词连续 pop,中间逐个 exit + 按策略销毁。 */
+int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
+                                 shrewd_lv_view_nav_pred_fn pred,
+                                 void *ctx);
+
+/** 同级跳转 / tab 切换:不产生历史。 */
+int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *nav,
+                               shrewd_lv_view_page_t *page,
+                               const void *params);
+
+/** 栈顶;空栈返回 NULL。 */
+shrewd_lv_view_page_t *shrewd_lv_view_nav_top(shrewd_lv_view_nav_t *nav);
+
+size_t shrewd_lv_view_nav_depth(const shrewd_lv_view_nav_t *nav);
+
 #define SHREWD_LV_VIEW_MAX_PLUGINS 8
 
 /** Application: page host + configuration + plugins. */
 typedef struct shrewd_lv_view_app {
     lv_display_t *display;
-    lv_obj_t *host; /**< page container (M2: shell content area) */
-    shrewd_lv_view_page_t *mounted;
+    lv_obj_t *host;           /**< page container (M2: shell content area) */
+    shrewd_lv_view_nav_t nav; /**< 导航栈 */
     const shrewd_lv_view_plugin_t *plugins[SHREWD_LV_VIEW_MAX_PLUGINS];
     size_t plugin_count;
 } shrewd_lv_view_app_t;
