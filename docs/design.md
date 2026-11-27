@@ -481,14 +481,21 @@ typedef struct {
 **操作集**(architecture.md 6.6):
 
 ```c
-int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *, const void *params);
+/* 已实现 */
+int shrewd_lv_view_nav_push(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page, const void *params);
 int shrewd_lv_view_nav_pop(shrewd_lv_view_nav_t *);
 int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *, shrewd_lv_view_nav_pred_fn, void *ctx);
-int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *anchor,
+int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *page, const void *params);
+
+/* 未实现(M3) */
+int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *, shrewd_lv_view_page_t *anchor,
                                     shrewd_lv_view_nav_pred_fn, void *ctx);
-int shrewd_lv_view_nav_replace(shrewd_lv_view_nav_t *, const shrewd_lv_view_page_desc_t *, const void *params);
 int shrewd_lv_view_nav_switch_branch(shrewd_lv_view_nav_t *, unsigned branch);
 ```
+
+> **实现修正**:原稿 `push`/`replace` 收 `desc`,但 §8.3 定的是**实例调用方持有** ——
+> 两者不一致。改为收**实例**(实例里就有 `desc`,更直接);**登记表留给恢复用**,
+> 因为恢复要按 `name` 找回实例。
 
 `pop_until` / `remove_until` **按谓词不按索引**(architecture.md 6.6 的调研修正);
 谓词从栈顶往下找第一个满足的,递归场景的歧义自然消解为"取最近的那个"。
@@ -508,11 +515,14 @@ typedef enum {
 
 typedef shrewd_lv_view_guard_result_t (*shrewd_lv_view_guard_fn)(
         void *ctx,
-        const shrewd_lv_view_page_desc_t *to,
-        const shrewd_lv_view_page_desc_t *from);
+        shrewd_lv_view_nav_request_t *req);   /* req->to / req->from / req->redirect */
 
 void shrewd_lv_view_nav_set_guard(shrewd_lv_view_nav_t *, shrewd_lv_view_guard_fn, void *ctx);
 ```
+
+> **实现修正**:原稿守卫只收 `to`/`from`,但 `REDIRECT` 需要**改道目标**却无处可填。
+> 改收 `shrewd_lv_view_nav_request_t *`,守卫填 `req->redirect` 即改道。这比让守卫
+> 再入调用 `nav_replace` 干净——**不重入**。
 
 **全局注册一个,而非每页一个** —— 守卫要看 `to/from` 才能判断,每页一个反而要拼装。
 四种结果见 architecture.md 6.7;`CONSUME` 就是"再按一次退出"的机制,于是
