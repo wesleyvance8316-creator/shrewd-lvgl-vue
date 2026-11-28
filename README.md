@@ -32,6 +32,9 @@ house style; consumers include only `shrewd-lv-view/view.h`.
   > ABI 配置(门控 `lv_obj_class_t` 等结构体字段),两边不一致会静默写坏内存。
   > `CMakeLists.txt` 有 configure 期门禁,不一致直接报错。
 
+- Interactive demo: [examples/demo](examples/demo) — an SDL window where the
+  tabs, the list, the guard and the live data all work by clicking
+  (`SDL_VIDEODRIVER=dummy ./demo --ticks 120` runs it headless)
 - API docs: `tools/build-docs.sh` → `build/docs/html/index.html`
   (needs `doxygen`; `graphviz` is optional and only adds the graphs)
 - CI: [.github/workflows/ci.yml](.github/workflows/ci.yml) runs the whole

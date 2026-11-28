@@ -74,6 +74,16 @@ jobs:
           cmake --build examples/prototype/build -j
           ./examples/prototype/build/prototype
 
+      # 可交互 demo:一个 SDL 窗口。CI 上没有显示,用 SDL 的 dummy 驱动跑
+      # 一截 —— 验的是"接上显示/输入之后框架照常工作",交互手感要人去看。
+      - name: Build and run the interactive demo
+        run: |
+          sudo apt-get install -y --no-install-recommends libsdl2-dev
+          cmake -S examples/demo -B examples/demo/build \
+                -DCMAKE_PREFIX_PATH=${{ env.PREFIX }}
+          cmake --build examples/demo/build -j
+          SDL_VIDEODRIVER=dummy ./examples/demo/build/demo --ticks 120
+
       - name: Style gate
         run: tools/check-style.sh
 

@@ -380,6 +380,7 @@ extern const lv_obj_class_t my_gauge_class;
 
 | 现象 | 原因 |
 |---|---|
+| 一建 display 就崩在 `lv_display_create` | **`lv_init()` 还没调**。框架的 `app_init` 不替你调(和原型一样,起 LVGL 是应用的事),顺序是 `lv_init()` → 建 display → `app_init` |
 | 界面完全不动、卡在第一个 tick | **没有 tick 源**。`app_init` 会装默认的,自己给要在它之前 `lv_tick_set_cb()` |
 | `lv_timer_handler()` 一直不返回 | display **没有 flush 回调**。即使无头测试也要给个空实现 |
 | 列表 `build` 跑了两次 | 它**只该跑一次**。内容变化要用 item 里的 ref,不要改 `build` |
@@ -389,6 +390,21 @@ extern const lv_obj_class_t my_gauge_class;
 | `push` 报 `NAV_STACK_FULL` | 栈深超上限(默认 32)。这是**安全底线**,GUI 是常驻进程没有逃生口 |
 
 ---
+
+### 可交互的样本:`examples/demo/`
+
+上面每一条在一个 SDL 窗口里都能点到底:底栏切 tab、列表点一行进详情、
+滑块改了再按"返回"会被**守卫拦一次**、电量由后台线程持续推上来。
+
+```sh
+cmake -S examples/demo -B examples/demo/build -DCMAKE_PREFIX_PATH=<prefix>
+cmake --build examples/demo/build && ./examples/demo/build/demo
+SDL_VIDEODRIVER=dummy ./examples/demo/build/demo --ticks 120   # 无头跑一截
+```
+
+**框架不碰 SDL** —— 窗口、像素搬运、事件读取都在 `src/platform/sdl_port.c`。
+那正是接自己的屏和触摸时要写的那层,所以它留在 demo 里当样本,不进框架;
+换到板子上就是把 SDL 换成 fbdev + evdev,外面的应用代码一行不动。
 
 ## 11. 构建与包
 
