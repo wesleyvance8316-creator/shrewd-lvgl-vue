@@ -119,5 +119,17 @@ target_link_libraries(shrewd-lv-view-errors
 
 add_test(NAME shrewd-lv-view.errors COMMAND shrewd-lv-view-errors)
 
+# 性能/内存基线(design.md §16):**打印绝对数,只断言相对关系**。
+add_executable(shrewd-lv-view-bench
+        bench.c
+        lvgl_fixture.c)
+
+target_link_libraries(shrewd-lv-view-bench
+        PRIVATE
+            shrewd-lv-view
+            shrewd-lv-view-warnings)
+
+add_test(NAME shrewd-lv-view.bench COMMAND shrewd-lv-view-bench)
+
 
 # Test binaries return non-zero on failure, so a plain COMMAND run is enough.

@@ -101,6 +101,17 @@ static void list_child_delete(lv_event_t *e) {
 static void list_binding_delete(lv_event_t *e) {
     shrewd_lv_view_list_binding_t *b = (shrewd_lv_view_list_binding_t *)lv_event_get_user_data(e);
     shrewd_basic_reflect_effect_dispose(&b->effect);
+    /*
+     * **先把子项上的清理钩子摘掉**。LVGL 删容器时,容器与子项的 DELETE 先后
+     * 不由我们控制;若容器这条先跑、子项那条后跑,`list_child_delete` 就会去读
+     * 已经释放的绑定 —— use-after-free,后面是堆损坏(ASAN 实测)。
+     * 摘钩子时子项还活着;若顺序反过来,子项已经把自己那格置空了,这里跳过。
+     */
+    for (size_t i = 0; i < b->count; ++i) {
+        if (NULL != b->slots[i].child) {
+            (void)lv_obj_remove_event_cb_with_user_data(b->slots[i].child, list_child_delete, b);
+        }
+    }
     /* 子项随容器一起被 LVGL 删掉;这里释放框架持有的实例。 */
     for (size_t i = 0; i < b->count; ++i) {
         slot_release(&b->slots[i], b->desc);

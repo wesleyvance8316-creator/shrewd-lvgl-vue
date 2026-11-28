@@ -11,7 +11,8 @@ on embedded Linux LVGL; the data plane is
 house style; consumers include only `shrewd-lv-view/view.h`.
 
 - **Start here**: [docs/guide.md](docs/guide.md) (tutorial) ·
-  [docs/api.md](docs/api.md) (API overview)
+  [docs/api.md](docs/api.md) (API overview) ·
+  [docs/benchmarks.md](docs/benchmarks.md) (memory & timing baseline)
 - Design & charter: [docs/initiation.md](docs/initiation.md) ·
   [docs/architecture.md](docs/architecture.md) (model) ·
   [docs/design.md](docs/design.md) (decisions)
