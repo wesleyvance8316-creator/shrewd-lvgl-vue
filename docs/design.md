@@ -1063,9 +1063,10 @@ C9 facade(三档)。
 **顺带修了一个真 bug**(ASAN 实测):列表绑定的容器删除路径 use-after-free ——
 容器的 DELETE 先释放绑定,子项的 DELETE 钩子还在读它。已修:释放前先摘钩子。
 
-**还有一个未决的崩溃**记在 benchmarks.md §4:大批绑定 widget 被删后再新建 widget,
-崩在 `lv_theme_apply → lv_obj_add_style` 读 NULL。已排除池耗尽、纯 LVGL 同模式、
-ASAN 报我们堆的问题这三条。**要单独查。**
+**那个崩溃已定位并堵住**(benchmarks.md §4):真因是 `config/lv_conf.h` 与已安装的
+lvgl **不一致** —— 它是 lvgl 的 ABI 配置,两边结构体布局对不上就会静默写坏内存。
+从零重建依赖后 8/8 不复现。`CMakeLists.txt` 加了 configure 期一致性门禁,
+不一致直接 FATAL。**规矩:改 `config/lv_conf.h` 就要重跑 `tools/build-deps.sh`。**
 
 **列表虚拟化**(§10.6)已补:`item_height > 0` 即只物化可视窗口,内存 O(可视) 而
 不是 O(总数);对账仍按 key,没有第二套规则。**不做 widget 复用** —— 那需要

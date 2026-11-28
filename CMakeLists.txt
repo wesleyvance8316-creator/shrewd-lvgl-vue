@@ -67,6 +67,34 @@ function(shrewd_lv_view_require_package name)
     endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
+# lv_conf.h 一致性门禁
+# ---------------------------------------------------------------------------
+# config/lv_conf.h 是 **lvgl 的 ABI 配置**:它门控 lv_obj_class_t 等结构体的字段
+# (LV_USE_OBJ_PROPERTY 等),开关不同则 sizeof 不同。所以"编译期一套、链接期
+# 另一套"会静默地写坏内存 —— 实测过一次:崩溃点在 lv_obj_add_style 里一个零值
+# style,查到最后是 build/prefix 里的 lvgl 是旧配置编出来的。
+#
+# 改了 config/lv_conf.h 就必须重跑 tools/build-deps.sh。这里在 configure 期比对
+# 两份文件,不一致直接报错,别让它进到运行期才炸。
+if(EXISTS "${SHREWD_LV_VIEW_DEPS_PREFIX}/include/lvgl/config/lv_conf.h")
+    file(READ "${SHREWD_LV_VIEW_DEPS_PREFIX}/include/lvgl/config/lv_conf.h"
+         _shrewd_lv_view_installed_conf)
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/config/lv_conf.h"
+         _shrewd_lv_view_source_conf)
+    if(NOT _shrewd_lv_view_installed_conf STREQUAL _shrewd_lv_view_source_conf)
+        message(FATAL_ERROR
+                "config/lv_conf.h 与已安装的 lvgl 不一致。\n"
+                "它是 ABI 配置(门控 lv_obj_class_t 的字段),不一致会静默写坏内存。\n"
+                "重建依赖即可:\n"
+                "    tools/build-deps.sh\n"
+                "或指向一个用当前配置构建过的 prefix:\n"
+                "    -DSHREWD_LV_VIEW_DEPS_PREFIX=<prefix>")
+    endif()
+    unset(_shrewd_lv_view_installed_conf)
+    unset(_shrewd_lv_view_source_conf)
+endif()
+
 # lvgl is external and released, so its version is part of the contract.
 # shrewd-basic is pinned by deps/versions.lock instead: it is pre-1.0 and
 # its minor number is not a compatibility claim worth enforcing here.

@@ -328,6 +328,7 @@ static void bench_ref_set(void) {
             }
         }
         printf("  %-28s %8.2f µs  (%d 个绑定)\n", "ref_set 传播", best, n);
+        lv_obj_delete(box);
     }
 }
 

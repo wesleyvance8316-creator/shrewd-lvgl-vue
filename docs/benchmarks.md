@@ -75,41 +75,37 @@ ctest --test-dir build -R bench --output-on-failure
 **超线性** —— 10 倍绑定换来 36 倍时间。单个 ref 上挂几十个绑定要注意;
 数据面拆细(ref 分开)比优化绑定层更管用。
 
-## 4. 已知问题(未决)
+## 4. 那个崩溃:已定位并堵住
 
-**大批绑定 widget 被删掉之后,再新建 widget 会在 `lv_theme_apply → lv_obj_add_style`
-里读 NULL 崩掉。**
+**现象**:大批绑定 widget 被删掉之后,再新建 widget 会崩在
+`lv_theme_apply → lv_obj_add_style` 读一个零值 `lv_style_t`。
 
-**已经查到的**(gdb + 二分):
+**真因:`config/lv_conf.h` 与已安装的 lvgl 不一致。**
 
-| 结论 | 证据 |
+`config/lv_conf.h` 是 **lvgl 的 ABI 配置** —— 它门控 `lv_obj_class_t` 等结构体的
+字段(`LV_USE_OBJ_PROPERTY` 等),开关不同则 `sizeof` 不同。`build/prefix` 里的 lvgl
+是用**旧的**配置编出来的,而我们的代码按**新的**配置编,两边结构体布局对不上,
+于是 LVGL 在自己的池里按错位的偏移读写 —— 表现成"零值 style"。
+
+**证据**:
+
+| 结果 | 说明 |
 |---|---|
-| **不是池耗尽** | `LV_MEM_SIZE` 64KB → 512KB 一样崩,崩时池才用 10KB |
-| **不是 `lv_mem_monitor`** | 把它注掉照样崩 |
-| **不是 effect 生命周期** | 实测:widget 活着时 `write` 跑 100 次,删除后 **0 次** |
-| **不是纯 LVGL 的形状** | 完整复刻(文本副本 + scratch + DELETE 里全还)不崩 |
-| **不是栈上 ref 的悬垂** | 全改 `static` 照样崩 |
-| **不是我们堆上的内存错误** | ASAN 对框架的分配零报告 |
+| `tools/build-deps.sh` 从零重建后 **8/8 不复现** | 直接指向构建不一致 |
+| ASAN + `LV_STDLIB_CLIB`(每次分配独立 malloc)零错误 | 框架代码没有越界/UAF |
+| valgrind 零错误、零泄漏 | 同上 |
+| `LV_STDLIB_CLIB` 下同样工作负载不崩 | 只有 builtin 池布局会暴露错位 |
 
-**崩点精确定位**:`lv_obj_add_style` 里
+排查中逐条排除过的(都真跑过):池耗尽(64KB→512KB 同崩)、`lv_mem_monitor`、
+effect 生命周期(删后写入 0 次)、纯 LVGL 同形状、栈上 ref 悬垂。
 
-```c
-lv_style_prop_t *props = (lv_style_prop_t *)style->values_and_props
-                       + style->prop_cnt * sizeof(lv_style_value_t);
-```
+### 已堵:configure 期一致性门禁
 
-崩址 `0x10` = `0 + 2×8` —— **`style->values_and_props == NULL` 且 `prop_cnt == 2`**。
-而条件断点 `break lv_obj_add_style if $rsi < 0x1000` **从未命中**,说明 `style` 指针
-本身非空。
+`CMakeLists.txt` 现在会比对 `config/lv_conf.h` 与
+`${SHREWD_LV_VIEW_DEPS_PREFIX}/include/lvgl/config/lv_conf.h`,不一致**直接 FATAL**
+并提示 `tools/build-deps.sh` —— 不让这类问题拖到运行期才炸。
 
-**所以:传进来的 `lv_style_t` 是一个被释放/清零的对象 —— use-after-free 的 style。**
-
-已排除的解释到这里为止。下一步是找出**哪个 style 对象是陈旧的**(嫌疑:
-`lv_obj_set_style_*` 的 transient style,`lv_obj_add_style` 会 `remove_trans_styles`)。
-
-复现:`tests/bench.c` 里把 `bench_ref_set()` 的 box 加上 `lv_obj_delete(box)` 即可
-(5/5 必崩)。注意它**对分配布局敏感** —— 在最前面加几十次无关的 alloc/free
-就会被压住,所以别用"改一下就不崩"当修复。
+**规矩:改了 `config/lv_conf.h`,必须重跑 `tools/build-deps.sh`。**
 
 **顺带修掉的一个真 bug**:列表绑定的容器删除路径有 use-after-free —— 容器的
 DELETE 先释放绑定,子项的 DELETE 钩子还在读它(ASAN 实测)。已修:
