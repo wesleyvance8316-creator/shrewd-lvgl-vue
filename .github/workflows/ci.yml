@@ -78,6 +78,8 @@ jobs:
       # 一截 —— 验的是"接上显示/输入之后框架照常工作",交互手感要人去看。
       - name: Build and run the interactive demo
         run: |
+          # 先 update:索引过期会 404(libasound2-dev 那次就是)。
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends libsdl2-dev
           cmake -S examples/demo -B examples/demo/build \
                 -DCMAKE_PREFIX_PATH=${{ env.PREFIX }}
@@ -90,7 +92,6 @@ jobs:
       # 文档是产品的一部分(README 链过去),坏了就该红。
       - name: Build the docs
         run: |
-          sudo apt-get update
           sudo apt-get install -y --no-install-recommends doxygen graphviz
           tools/build-docs.sh
 
