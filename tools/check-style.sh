@@ -9,7 +9,13 @@
 #      sub-condition in parentheses (tools/check-condition-parens.py).
 #
 # Usage: tools/check-style.sh
-#   BUILD=<dir>   compile database for clang-tidy (default: build)
+#   BUILD=<dir>          compile database for clang-tidy (default: build)
+#   CLANG_FORMAT=<bin>   formatter to use (default: clang-format)
+#   CLANG_TIDY=<bin>     checker to use   (default: clang-tidy)
+#
+# The two overrides exist because clang-format's output is version-specific:
+# CI pins the same version that produced the committed formatting, otherwise
+# the gate reports "drift" that is really just a toolchain difference.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -26,7 +32,7 @@ for f in $(find library include tests tools \
         *.in) continue ;;
         tools/reflect_gen_golden*) continue ;;  # machine output, not hand code
     esac
-    if ! clang-format --dry-run --Werror "$f" > /dev/null 2>&1; then
+    if ! "${CLANG_FORMAT:-clang-format}" --dry-run --Werror "$f" > /dev/null 2>&1; then
         echo "format drift: $f"
         fail=1
     fi
@@ -41,7 +47,7 @@ for f in $(find library tests tools -name '*.c' | sort); do
     case "$f" in
         tools/reflect_gen_golden*) continue ;;  # machine output, not hand code
     esac
-    out=$(clang-tidy $tidy_args "$f" -- \
+    out=$("${CLANG_TIDY:-clang-tidy}" $tidy_args "$f" -- \
               -Iinclude -Iinclude/shrewd-basic-internal -Ilibrary/reflect \
               -std=c11 2> /dev/null \
           | grep -E 'warning: .*\[(cppcoreguidelines-init-variables|readability-braces-around-statements)\]' \

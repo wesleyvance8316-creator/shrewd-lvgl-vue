@@ -28,6 +28,16 @@ house style; consumers include only `shrewd-lv-view/view.h`.
   最后一步把**框架自己**也装进同一个前缀 —— 消费者应用靠
   `find_package(shrewd-lv-view CONFIG)` 找它,缺了就编不过。
 
+  > **改了 `config/lv_conf.h` 就要重跑 `tools/build-deps.sh`** —— 它是 lvgl 的
+  > ABI 配置(门控 `lv_obj_class_t` 等结构体字段),两边不一致会静默写坏内存。
+  > `CMakeLists.txt` 有 configure 期门禁,不一致直接报错。
+
+- API docs: `tools/build-docs.sh` → `build/docs/html/index.html`
+  (needs `doxygen`; `graphviz` is optional and only adds the graphs)
+- CI: [.github/workflows/ci.yml](.github/workflows/ci.yml) runs the whole
+  chain — dependencies, framework tests, the component library, the
+  prototype, the style gate, and the docs — on every push and PR.
+
 - Dependencies: lvgl 9.6.0 and shrewd-basic, pinned in
   [deps/versions.lock](deps/versions.lock). Each is built as its own
   project and imported through `find_package` - no `add_subdirectory`,

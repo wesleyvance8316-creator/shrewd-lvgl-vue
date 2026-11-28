@@ -266,7 +266,11 @@ int shrewd_lv_view_nav_pop_until(shrewd_lv_view_nav_t *nav,
  * 典型:登录 / 向导结束直达 home,流程页一层不留 —— home 不在栈里时
  * `pop_until` 做不到,这个能。
  *
- * @param pred  NULL 表示恒不命中:锚点以下全清,栈里只剩 @p page。
+ * @param nav      导航。
+ * @param page     要压上去的新页(实例调用方持有,§8.3)。
+ * @param params   传给 create 的参数,拷进栈条目;不需要则 NULL。
+ * @param pred     NULL 表示恒不命中:锚点以下全清,栈里只剩 @p page。
+ * @param ctx      传给 @p pred 的上下文。
  */
 int shrewd_lv_view_nav_remove_until(shrewd_lv_view_nav_t *nav,
                                     shrewd_lv_view_page_t *page,

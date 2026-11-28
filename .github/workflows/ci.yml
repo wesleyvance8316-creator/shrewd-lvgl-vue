@@ -1,0 +1,86 @@
+# CI for shrewd-lvgl-vue.
+#
+# 一个 job 串下来:依赖 → 框架 → 测试 → 组件库 → 原型 → style gate → 文档。
+# 不拆成并行 job,是因为后面每一步都消费 build/prefix 里同一份安装产物;
+# 拆开就要把整个 prefix 当 artifact 传来传去,比串行还慢。
+#
+# 依赖缓存的 key 里带了 `config/lv_conf.h` —— 它是 lvgl 的 **ABI 配置**
+# (CMakeLists.txt 有一致性门禁),改了它必须重建依赖,缓存也必须失效。
+name: ci
+
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: build/prefix
+          key: deps-${{ runner.os }}-${{ hashFiles('deps/versions.lock', 'config/lv_conf.h') }}
+
+      # --basic-from git:CI 上没有 ../shrewd-basic 这个兄弟目录,要按
+      # deps/versions.lock 里钉的 commit 从 git 取。两个仓库都得是公开的
+      # (或给 runner 配好凭据)。
+      - name: Fetch dependency sources
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: tools/fetch-deps.sh --basic-from git
+
+      - name: Build dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: tools/build-deps.sh
+
+      - name: Configure and build the framework
+        run: |
+          cmake -S . -B build -DCMAKE_PREFIX_PATH=build/prefix
+          cmake --build build -j
+
+      - name: Test the framework
+        run: ctest --test-dir build --output-on-failure
+
+      # 框架自己也装进同一个 prefix:消费者靠 find_package 找它,
+      # 少了这步组件库和原型都编不过。
+      - name: Install the framework
+        run: cmake --install build --prefix build/prefix
+
+      - name: Build and test the component library
+        run: |
+          cmake -S examples/component-lib -B examples/component-lib/build \
+                -DCMAKE_PREFIX_PATH=build/prefix
+          cmake --build examples/component-lib/build -j
+          cmake --install examples/component-lib/build --prefix build/prefix
+          ctest --test-dir examples/component-lib/build --output-on-failure
+
+      # 原型是"框架怎么被消费"的活样本:它靠 find_package 拿框架和组件库,
+      # 跑通就等于端到端验了整条安装链。
+      - name: Build and run the prototype
+        run: |
+          cmake -S examples/prototype -B examples/prototype/build \
+                -DCMAKE_PREFIX_PATH=build/prefix
+          cmake --build examples/prototype/build -j
+          ./examples/prototype/build/prototype
+
+      - name: Style gate
+        run: tools/check-style.sh
+
+      # 文档是产品的一部分(README 链过去),坏了就该红。
+      - name: Build the docs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends doxygen graphviz
+          tools/build-docs.sh
+
+      - name: Upload the docs
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: build/docs/html
+          retention-days: 14

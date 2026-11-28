@@ -1,0 +1,50 @@
+# Doxyfile for shrewd-lv-view. Run from the repo root:
+#     tools/build-docs.sh          (or: doxygen doxygen/Doxyfile)
+#
+# 与 shrewd-basic 的 doxygen/Doxyfile 同一套路:C 优化、只出 HTML。
+# 输出到 build/docs —— 生成物不进仓库。
+
+PROJECT_NAME           = "shrewd-lv-view"
+PROJECT_BRIEF          = "Vue-style reactive architecture for LVGL in pure C"
+OUTPUT_DIRECTORY       = build/docs
+
+# 头文件是唯一的产品面:消费者只 include shrewd-lv-view/view.h。
+# 教程与 API 总览一起进去,生成出来的才是能用的文档站。
+# 整个 docs/ 都进去:api.md / guide.md 链到 design.md 等,少了它们 doxygen 会
+# 报 "unable to resolve reference"。设计文档本来也值得进文档站。
+INPUT                   = include/shrewd-lv-view \
+                          docs
+FILE_PATTERNS           = *.h *.md
+RECURSIVE               = YES
+EXCLUDE_PATTERNS        = *.in
+
+OPTIMIZE_OUTPUT_FOR_C   = YES
+EXTRACT_ALL             = YES
+EXTRACT_STATIC          = YES
+HIDE_UNDOC_MEMBERS      = NO
+HIDE_UNDOC_CLASSES      = NO
+WARN_IF_UNDOCUMENTED    = NO
+WARN_IF_DOC_ERROR       = YES
+WARN_NO_PARAMDOC        = NO
+
+# 公开形参里有 lvgl / shrewd-basic 的类型,它们不在 INPUT 里 —— 不必为此报噪声。
+QUIET                   = YES
+
+GENERATE_HTML           = YES
+HTML_OUTPUT             = html
+GENERATE_LATEX          = NO
+GENERATE_MAN            = NO
+GENERATE_XML            = NO
+GENERATE_TREEVIEW       = YES
+DISABLE_INDEX           = NO
+FULL_PATH_NAMES         = NO
+SORT_MEMBER_DOCS        = YES
+SOURCE_BROWSER          = NO
+VERBATIM_HEADERS        = NO
+
+# 强调 C 的名字,不给 C++ 包装
+OPTIMIZE_OUTPUT_FOR_C   = YES
+CPP_CLI_SUPPORT         = NO
+
+# HAVE_DOT 由 tools/build-docs.sh 按机器上有没有 graphviz 决定 —— 没有就不画
+# 调用/包含图,也不刷警告。想强制开:自己跑 doxygen 时加 HAVE_DOT = YES。
