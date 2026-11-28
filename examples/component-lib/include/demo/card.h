@@ -15,6 +15,7 @@
 #ifndef DEMO_COMPONENTS_DEMO_CARD_H
 #define DEMO_COMPONENTS_DEMO_CARD_H
 
+#include "demo/theme.h"
 #include "shrewd-lv-view/view.h"
 
 /** 创建参数:可序列化的简单值(§7.2)。 */
@@ -35,16 +36,10 @@ typedef struct {
     void *footer_ctx;
 } demo_card_slots_t;
 
-/**
- * 设计 token(§7.6):片段**不自造主题引擎**,只暴露可覆盖的 style 常量表,
- * 创建时套用。要改就在 create 前改它。
+/*
+ * 设计 token 见 <demo/theme.h>:**片段与控件共用一份**。
+ * 要改就在 create 前改 `demo_tokens` —— 组件创建时套用(§7.6)。
  */
-typedef struct {
-    int32_t height;
-    int32_t pad;
-} demo_card_style_t;
-
-extern demo_card_style_t demo_card_style;
 
 /** 组件实例:调用方内嵌。 */
 typedef struct {

@@ -26,7 +26,8 @@ find_package(shrewd-lv-view CONFIG REQUIRED)
 
 add_library(demo-components STATIC
         library/card.c
-        library/gauge.c)
+        library/gauge.c
+        library/theme.c)
 add_library(demo-components::demo-components ALIAS demo-components)
 
 target_include_directories(demo-components PUBLIC

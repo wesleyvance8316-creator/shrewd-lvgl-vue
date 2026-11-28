@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "demo/gauge.h"
+#include "demo/theme.h"
 #include "lvgl_fixture.h"
 
 static int g_fail;
@@ -106,6 +107,20 @@ static void test_instance_size(void) {
     check(0 != demo_gauge_max(g), "constructor set a max");
 }
 
+/* --- 6. 主题接线:控件走 LVGL 主题(§7.6)--------------------------- */
+
+static void test_theme(void) {
+    printf("test_theme\n");
+    lv_display_t *disp = lv_display_get_default();
+    check(SHREWD_LV_VIEW_ERR_OK == demo_theme_init(disp, NULL), "theme_init");
+    check(demo_tokens.gauge_height == demo_tokens_default.gauge_height, "tokens applied");
+
+    lv_obj_t *g = demo_gauge_create(lv_screen_active());
+    /* 主题给的样式真的挂在控件上了 —— 高度来自 token。 */
+    check(demo_tokens.gauge_height == lv_obj_get_style_height(g, LV_PART_MAIN),
+          "the theme styled the custom widget");
+}
+
 int main(void) {
     lvgl_fixture_init();
     check(SHREWD_LV_VIEW_ERR_OK == demo_gauge_init(), "init registers the event id");
@@ -114,6 +129,7 @@ int main(void) {
     test_props();
     test_custom_event();
     test_binding();
+    test_theme();
     test_instance_size();
     if (0 == g_fail) {
         printf("test_widget: ok\n");

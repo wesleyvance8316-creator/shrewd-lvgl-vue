@@ -20,7 +20,7 @@
 typedef struct shrewd_lv_view_binding {
     shrewd_basic_reflect_effect_t effect;
     shrewd_basic_reflect_ref_t *ref;
-    const shrewd_lv_view_target_t *target;
+    shrewd_lv_view_target_t target; /* 按值存:允许每条绑定自己的 ctx */
     void *obj;
     void *scratch; /**< ref->size bytes, for target->read() */
     int applying;
@@ -31,17 +31,17 @@ static void binding_apply(void *ctx) {
     shrewd_lv_view_binding_t *b = (shrewd_lv_view_binding_t *)ctx;
     const void *value = shrewd_basic_reflect_ref_get(b->ref);
     b->applying = 1;
-    b->target->write(b->obj, value, b->ref->size);
+    b->target.write(b->obj, value, b->ref->size, b->target.ctx);
     b->applying = 0;
 }
 
 /** widget → ref。applying 期间退——那是本绑定在写 widget,不是用户改动。 */
 static void binding_changed(lv_event_t *e) {
     shrewd_lv_view_binding_t *b = (shrewd_lv_view_binding_t *)lv_event_get_user_data(e);
-    if ((0 != b->applying) || (NULL == b->target->read)) {
+    if ((0 != b->applying) || (NULL == b->target.read)) {
         return;
     }
-    if (SHREWD_LV_VIEW_ERR_OK != b->target->read(b->obj, b->scratch, b->ref->size)) {
+    if (SHREWD_LV_VIEW_ERR_OK != b->target.read(b->obj, b->scratch, b->ref->size, b->target.ctx)) {
         return;
     }
     (void)shrewd_basic_reflect_ref_set(b->ref, b->scratch, b->ref->size);
@@ -74,7 +74,7 @@ int shrewd_lv_view_bind(void *obj,
     }
     b = (shrewd_lv_view_binding_t *)slot;
     b->ref = ref;
-    b->target = target;
+    b->target = *target; /* 按值:调用方可以给栈上的临时 target */
     b->obj = obj;
     status = shrewd_basic_platform_alloc(&b->scratch, ref->size);
     if (SHREWD_BASIC_ERR_OK != status) {
@@ -102,8 +102,9 @@ int shrewd_lv_view_bind(void *obj,
 
 /* --- 便捷绑定:每个 widget/属性一张 target 表(design.md §6)---------- */
 
-static void label_text_write(void *obj, const void *value, size_t size) {
+static void label_text_write(void *obj, const void *value, size_t size, void *ctx) {
     (void)size;
+    (void)ctx;
     lv_label_set_text((lv_obj_t *)obj, (const char *)value);
 }
 
@@ -117,12 +118,14 @@ int shrewd_lv_view_bind_label_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t *re
     return shrewd_lv_view_bind(obj, &g_label_text, ref);
 }
 
-static void slider_value_write(void *obj, const void *value, size_t size) {
+static void slider_value_write(void *obj, const void *value, size_t size, void *ctx) {
     (void)size;
+    (void)ctx;
     lv_slider_set_value((lv_obj_t *)obj, *(const int32_t *)value, LV_ANIM_OFF);
 }
 
-static int slider_value_read(void *obj, void *out, size_t size) {
+static int slider_value_read(void *obj, void *out, size_t size, void *ctx) {
+    (void)ctx;
     if (sizeof(int32_t) != size) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
@@ -140,12 +143,14 @@ int shrewd_lv_view_bind_slider_value(lv_obj_t *obj, shrewd_basic_reflect_ref_t *
     return shrewd_lv_view_bind(obj, &g_slider_value, ref);
 }
 
-static void textarea_text_write(void *obj, const void *value, size_t size) {
+static void textarea_text_write(void *obj, const void *value, size_t size, void *ctx) {
     (void)size;
+    (void)ctx;
     lv_textarea_set_text((lv_obj_t *)obj, (const char *)value);
 }
 
-static int textarea_text_read(void *obj, void *out, size_t size) {
+static int textarea_text_read(void *obj, void *out, size_t size, void *ctx) {
+    (void)ctx;
     const char *text = lv_textarea_get_text((const lv_obj_t *)obj);
     if (NULL == text) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
@@ -173,7 +178,8 @@ int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t 
  * `LV_STATE_CHECKED`,否则摘掉。**样式交给主题** —— 框架只表达"谁是当前",
  * 不决定它长什么样(design.md §7.6)。
  */
-static void tab_bar_write(void *obj, const void *value, size_t size) {
+static void tab_bar_write(void *obj, const void *value, size_t size, void *ctx) {
+    (void)ctx;
     lv_obj_t *bar = (lv_obj_t *)obj;
     if (sizeof(uint32_t) != size) {
         return;
@@ -201,4 +207,134 @@ static const shrewd_lv_view_target_t g_tab_bar = {
 
 int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref) {
     return shrewd_lv_view_bind(bar, &g_tab_bar, ref);
+}
+
+/* --- LVGL property 的通用绑定(§7.4)--------------------------------- */
+
+/**
+ * 属性类型 → 槽位宽度。**类型校验就在这一步**:认不出的类型、宽度对不上的
+ * ref 都直接拒,绝不带着错的宽度进 setter(那会读越界)。
+ */
+static int prop_width(uint32_t id, size_t *out) {
+    switch (LV_PROPERTY_ID_TYPE(id)) {
+    case LV_PROPERTY_TYPE_INT:
+    case LV_PROPERTY_TYPE_BOOL:
+        *out = sizeof(int32_t);
+        return SHREWD_LV_VIEW_ERR_OK;
+    case LV_PROPERTY_TYPE_POINTER:
+    case LV_PROPERTY_TYPE_TEXT:
+    case LV_PROPERTY_TYPE_OBJ:
+    case LV_PROPERTY_TYPE_IMGSRC:
+    case LV_PROPERTY_TYPE_FONT:
+        *out = sizeof(void *);
+        return SHREWD_LV_VIEW_ERR_OK;
+    case LV_PROPERTY_TYPE_COLOR:
+        *out = sizeof(lv_color_t);
+        return SHREWD_LV_VIEW_ERR_OK;
+    case LV_PROPERTY_TYPE_POINT:
+        *out = sizeof(lv_point_t);
+        return SHREWD_LV_VIEW_ERR_OK;
+    default:
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+}
+
+/* 按**类型**取值,不按宽度 —— lv_color_t 可能和 int32_t 一样宽,按宽度分不清。 */
+static void prop_write(void *obj, const void *value, size_t size, void *ctx) {
+    uint32_t id = (uint32_t)(uintptr_t)ctx;
+    lv_property_t prop;
+    memset(&prop, 0, sizeof(prop));
+    prop.id = id;
+    switch (LV_PROPERTY_ID_TYPE(id)) {
+    case LV_PROPERTY_TYPE_INT:
+    case LV_PROPERTY_TYPE_BOOL:
+        if (sizeof(int32_t) == size) {
+            prop.num = *(const int32_t *)value;
+        }
+        break;
+    case LV_PROPERTY_TYPE_POINTER:
+    case LV_PROPERTY_TYPE_TEXT:
+    case LV_PROPERTY_TYPE_OBJ:
+    case LV_PROPERTY_TYPE_IMGSRC:
+    case LV_PROPERTY_TYPE_FONT:
+        if (sizeof(void *) == size) {
+            prop.ptr = *(void *const *)value;
+        }
+        break;
+    case LV_PROPERTY_TYPE_COLOR:
+        if (sizeof(lv_color_t) == size) {
+            prop.color = *(const lv_color_t *)value;
+        }
+        break;
+    case LV_PROPERTY_TYPE_POINT:
+        if (sizeof(lv_point_t) == size) {
+            prop.point = *(const lv_point_t *)value;
+        }
+        break;
+    default:
+        return;
+    }
+    (void)lv_obj_set_property((lv_obj_t *)obj, &prop);
+}
+
+static int prop_read(void *obj, void *out, size_t size, void *ctx) {
+    uint32_t id = (uint32_t)(uintptr_t)ctx;
+    lv_property_t prop = lv_obj_get_property((lv_obj_t *)obj, id);
+    switch (LV_PROPERTY_ID_TYPE(id)) {
+    case LV_PROPERTY_TYPE_INT:
+    case LV_PROPERTY_TYPE_BOOL:
+        if (sizeof(int32_t) == size) {
+            *(int32_t *)out = prop.num;
+            return SHREWD_LV_VIEW_ERR_OK;
+        }
+        break;
+    case LV_PROPERTY_TYPE_POINTER:
+    case LV_PROPERTY_TYPE_TEXT:
+    case LV_PROPERTY_TYPE_OBJ:
+    case LV_PROPERTY_TYPE_IMGSRC:
+    case LV_PROPERTY_TYPE_FONT:
+        if (sizeof(void *) == size) {
+            *(const void **)out = prop.ptr;
+            return SHREWD_LV_VIEW_ERR_OK;
+        }
+        break;
+    case LV_PROPERTY_TYPE_COLOR:
+        if (sizeof(lv_color_t) == size) {
+            *(lv_color_t *)out = prop.color;
+            return SHREWD_LV_VIEW_ERR_OK;
+        }
+        break;
+    case LV_PROPERTY_TYPE_POINT:
+        if (sizeof(lv_point_t) == size) {
+            *(lv_point_t *)out = prop.point;
+            return SHREWD_LV_VIEW_ERR_OK;
+        }
+        break;
+    default:
+        break;
+    }
+    return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+}
+
+int shrewd_lv_view_bind_prop(lv_obj_t *obj,
+                             uint32_t id,
+                             shrewd_basic_reflect_ref_t *ref,
+                             uint32_t changed_event) {
+    if ((NULL == obj) || (NULL == ref)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    size_t want = 0;
+    if (SHREWD_LV_VIEW_ERR_OK != prop_width(id, &want)) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID;
+    }
+    if (want != ref->size) {
+        return SHREWD_LV_VIEW_ERR_ARG_INVALID; /* 类型不匹配:拒,不进 setter */
+    }
+    shrewd_lv_view_target_t target;
+    memset(&target, 0, sizeof(target));
+    target.write = prop_write;
+    target.read = (0 != changed_event) ? prop_read : NULL;
+    target.changed_event = changed_event;
+    target.ctx = (void *)(uintptr_t)id;
+    return shrewd_lv_view_bind(obj, &target, ref);
 }

@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "demo/gauge.h"
+#include "demo/theme.h"
 #include "devices.h"
 #include "platform/sdl_port.h"
 #include "views.h"
@@ -62,6 +63,11 @@ int main(int argc, char **argv) {
     sdl_port_t port;
     if (0 != sdl_port_init(&port, DEMO_W, DEMO_H, "shrewd-lv-view demo")) {
         fprintf(stderr, "SDL 起不来(无显示环境可设 SDL_VIDEODRIVER=dummy)\n");
+        return 1;
+    }
+
+    /* 组件库的主题:控件走 LVGL 主题,片段用同一份 token(§7.6)。 */
+    if (SHREWD_LV_VIEW_ERR_OK != demo_theme_init(port.display, NULL)) {
         return 1;
     }
 

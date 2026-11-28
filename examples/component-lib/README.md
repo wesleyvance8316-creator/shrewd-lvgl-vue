@@ -55,6 +55,6 @@ demo_bind_gauge_value(g, &some_ref);   /* 就接上了 */
 
 1. **warnings 目标要 `$<BUILD_INTERFACE:...>` 包住** —— 静态库会把私有链接依赖记进
    导出集,而它是本库自己的,不该跟着包走(shrewd-lv-view 同样处理)。
-2. **带写回的 target 表不能是 `const`** —— 写回要挂自定义事件 id,而它是**运行时**
-   `lv_event_register_id()` 注册的,只能在 `init` 里填。label 那种没有自定义事件的
-   才能写死成 `static const`。
+2. **target 现在按值拷贝进绑定**,还带一个 `void *ctx` —— 所以可以在调用处
+   现拼一个 target,不必让它比绑定活得久,也不需要 `const` 例外。写回挂的
+   自定义事件 id 是运行时注册的,正好在拼的时候填(见 `demo_bind_gauge_value`)。

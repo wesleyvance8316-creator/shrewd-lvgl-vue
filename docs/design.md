@@ -189,7 +189,13 @@ int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref);
 组件生态是"**使用者怎么开发、怎么用组件**"的形式化定义。机制面与默认值已全部落定;
 调研依据与被堵死的路见 §7.8。
 
-> **已落地**:`shrewd_lv_view_slot_fn`(§7.5 框架唯一提供的东西)、片段样板
+> **已落地**:`shrewd_lv_view_slot_fn`(§7.5 框架唯一提供的东西)、
+> `shrewd_lv_view_bind_prop`(§7.4:**任意 LVGL property 都能绑,带类型校验** ——
+> ref 宽度与属性类型不一致直接拒)、`shrewd_lv_view_target_t` 加了 `void *ctx`
+> 并改为**按值拷贝**,于是每条绑定可以有自己的配置,不必维护比绑定活得久的静态表。
+> 主题接线(§7.6)也做了:`demo-components` 里有真的 `lv_theme_t`(父主题 = LVGL
+> 默认主题,只加自己控件的样子),片段与控件共用一份 `demo_tokens_t`。
+> 片段样板
 > `tests/demo_card.{c,h}`(§7.2 + v-model §7.4 + 槽 §7.5 + 设计 token §7.6)、
 > 控件样板 `tests/demo_gauge.{c,h}`(§7.3,含四个坑的实测)。单测
 > `test_component.c` / `test_widget.c`。

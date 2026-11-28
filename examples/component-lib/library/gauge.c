@@ -6,6 +6,8 @@
  */
 #include "demo/gauge.h"
 
+#include <string.h>
+
 uint32_t demo_gauge_event_value_changed;
 
 int demo_gauge_init(void) {
@@ -100,13 +102,15 @@ const lv_obj_class_t demo_gauge_class = {
 
 /* --- 绑定胶水(§6:新增属性 = 一张 target 表 + 一个便捷函数)---------- */
 
-static void gauge_value_write(void *obj, const void *value, size_t size) {
+static void gauge_value_write(void *obj, const void *value, size_t size, void *ctx) {
+    (void)ctx;
     if (sizeof(int32_t) == size) {
         demo_gauge_set_value((lv_obj_t *)obj, *(const int32_t *)value);
     }
 }
 
-static int gauge_value_read(void *obj, void *out, size_t size) {
+static int gauge_value_read(void *obj, void *out, size_t size, void *ctx) {
+    (void)ctx;
     if (sizeof(int32_t) != size) {
         return SHREWD_LV_VIEW_ERR_ARG_INVALID;
     }
@@ -114,21 +118,22 @@ static int gauge_value_read(void *obj, void *out, size_t size) {
     return SHREWD_LV_VIEW_ERR_OK;
 }
 
-/*
- * **这张表不能是 `const`**:写回要挂自定义事件 id,而它是**运行时**
- * `lv_event_register_id()` 注册的。所以 init 里填,不像 label 那样能写死。
- */
-static shrewd_lv_view_target_t g_gauge_value;
-
 int demo_bind_gauge_value(lv_obj_t *g, shrewd_basic_reflect_ref_t *ref) {
     int status = demo_gauge_init();
     if (SHREWD_LV_VIEW_ERR_OK != status) {
         return status;
     }
-    g_gauge_value.write = gauge_value_write;
-    g_gauge_value.read = gauge_value_read;
-    g_gauge_value.changed_event = demo_gauge_event_value_changed;
-    return shrewd_lv_view_bind(g, &g_gauge_value, ref);
+    /*
+     * target **按值拷贝**进绑定,所以直接在栈上拼一个就行 —— 不需要
+     * 一个比绑定活得久的静态表,也不需要 `const` 例外。
+     * 写回挂的自定义事件 id 是运行时注册的,正好在这里填。
+     */
+    shrewd_lv_view_target_t target;
+    memset(&target, 0, sizeof(target));
+    target.write = gauge_value_write;
+    target.read = gauge_value_read;
+    target.changed_event = demo_gauge_event_value_changed;
+    return shrewd_lv_view_bind(g, &target, ref);
 }
 
 lv_obj_t *demo_gauge_create(lv_obj_t *parent) {

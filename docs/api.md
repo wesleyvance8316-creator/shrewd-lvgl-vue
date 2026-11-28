@@ -99,9 +99,10 @@ int shrewd_lv_view_shell_add_tab(shrewd_lv_view_shell_t *, const char *label);
 
 ```c
 typedef struct shrewd_lv_view_target {
-    void (*write)(void *obj, const void *value, size_t size);   /* ref → widget */
-    int  (*read)(void *obj, void *out, size_t size);            /* widget → ref,NULL = 单向 */
+    void (*write)(void *obj, const void *value, size_t size, void *ctx);   /* ref → widget */
+    int  (*read)(void *obj, void *out, size_t size, void *ctx);            /* widget → ref,NULL = 单向 */
     uint32_t changed_event;                                     /* 写回触发的事件码 */
+    void *ctx;   /* 每条绑定自己的配置(如 LVGL 属性号);静态表填 NULL */
 } shrewd_lv_view_target_t;
 
 int shrewd_lv_view_bind(void *obj, const shrewd_lv_view_target_t *target,
@@ -120,6 +121,13 @@ int shrewd_lv_view_bind(void *obj, const shrewd_lv_view_target_t *target,
 | `shrewd_lv_view_bind_tab_bar(bar, ref)` | 单向 | `uint32_t` |
 
 **新增一个 widget 属性 = 加一张静态 target 表 + 一个 3 行便捷函数**,不改机制。
+
+**或者干脆不写表**:`shrewd_lv_view_bind_prop(obj, id, ref, changed_event)` 把**任意
+LVGL property** 接上绑定 —— 自定义控件的属性也一样。**类型校验在这里**:
+`ref` 的宽度必须与属性声明的类型一致,不一致直接 `ARG_INVALID`,不会带着错宽度进 setter。
+
+`target` 由 `bind` **按值拷贝**,所以可以在调用处现拼一个(带上 `ctx`),不必让它
+比绑定活得久。
 
 ### 4.3 v-model
 

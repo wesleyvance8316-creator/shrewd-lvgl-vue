@@ -7,12 +7,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/** 设计 token 的默认值(§7.6)。调用方可在 create 前覆盖。 */
-demo_card_style_t demo_card_style = {
-    .height = 60,
-    .pad = 8,
-};
-
 int demo_card_create(demo_card_t *c,
                      lv_obj_t *parent,
                      const demo_card_params_t *params,
@@ -38,15 +32,15 @@ int demo_card_create(demo_card_t *c,
 
     /* 2. widget 树 —— 尺寸来自设计 token(§7.6),不写死。 */
     lv_obj_t *root = lv_obj_create(parent);
-    lv_obj_set_size(root, LV_HOR_RES, demo_card_style.height);
+    lv_obj_set_size(root, LV_HOR_RES, demo_tokens.card_height);
     c->root = root;
 
     lv_obj_t *label = lv_label_create(root);
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, demo_card_style.pad, demo_card_style.pad);
+    lv_obj_align(label, LV_ALIGN_TOP_LEFT, demo_tokens.pad_small, demo_tokens.pad_small);
 
     lv_obj_t *slider = lv_slider_create(root);
-    lv_obj_set_size(slider, LV_HOR_RES - (2 * demo_card_style.pad), 12);
-    lv_obj_align(slider, LV_ALIGN_TOP_LEFT, demo_card_style.pad, demo_card_style.height / 2);
+    lv_obj_set_size(slider, LV_HOR_RES - (2 * demo_tokens.pad_small), 12);
+    lv_obj_align(slider, LV_ALIGN_TOP_LEFT, demo_tokens.pad_small, demo_tokens.card_height / 2);
     lv_slider_set_range(slider, 0, 100);
 
     /* 3. 绑定:状态 → widget,双向。绑定随 widget 自清(§3)。 */

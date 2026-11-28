@@ -166,14 +166,14 @@ static void test_vmodel(void) {
 
 static void test_design_tokens(void) {
     printf("test_design_tokens\n");
-    demo_card_style.height = 80;
+    demo_tokens.card_height = 80;
     demo_card_t card;
     check(SHREWD_LV_VIEW_ERR_OK == demo_card_create(&card, lv_screen_active(), NULL, NULL),
           "create");
     check(80 == lv_obj_get_style_height(card.root, LV_PART_MAIN),
           "design token applied to the root");
     demo_card_dispose(&card);
-    demo_card_style.height = 60; /* 还原默认 */
+    demo_tokens = demo_tokens_default; /* 还原默认 */
 }
 
 int main(void) {

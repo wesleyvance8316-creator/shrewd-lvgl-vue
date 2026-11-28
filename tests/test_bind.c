@@ -23,14 +23,16 @@ static void check(int ok, const char *what) {
 
 static int g_read_calls;
 
-static void poke_write(void *obj, const void *value, size_t size) {
+static void poke_write(void *obj, const void *value, size_t size, void *ctx) {
+    (void)ctx;
     (void)value;
     (void)size;
     /* 模拟 widget 自己触发写回事件。 */
     (void)lv_obj_send_event((lv_obj_t *)obj, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
-static int poke_read(void *obj, void *out, size_t size) {
+static int poke_read(void *obj, void *out, size_t size, void *ctx) {
+    (void)ctx;
     (void)obj;
     g_read_calls += 1;
     if (sizeof(int32_t) == size) {
@@ -137,9 +139,54 @@ static void test_delete_cleanup(void) {
           "ref_set after delete");
 }
 
+/* --- bind_prop:任意 LVGL property 上绑定 + 类型校验(§7.4)---------- */
+
+static void test_bind_prop(void) {
+    printf("test_bind_prop\n");
+    lv_obj_t *slider = lv_slider_create(lv_screen_active());
+
+    int32_t v = 30;
+    shrewd_basic_reflect_ref_t ref;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&ref, &v, sizeof(v)), "ref_init");
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_bind_prop(slider, LV_PROPERTY_SLIDER_VALUE, &ref, 0),
+          "bind_prop");
+    check(30 == lv_slider_get_value(slider), "the property drives the widget");
+
+    v = 80;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_set(&ref, &v, sizeof(v)), "ref_set");
+    check(80 == lv_slider_get_value(slider), "ref change lands in the property");
+
+    /* 类型校验:宽度对不上**必须拒**,不能带着错宽度进 setter。 */
+    int16_t narrow = 0;
+    shrewd_basic_reflect_ref_t bad;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&bad, &narrow, sizeof(narrow)),
+          "ref_init narrow");
+    check(SHREWD_LV_VIEW_ERR_ARG_INVALID
+              == shrewd_lv_view_bind_prop(slider, LV_PROPERTY_SLIDER_VALUE, &bad, 0),
+          "width mismatch is rejected");
+    check(SHREWD_LV_VIEW_ERR_ARG_INVALID == shrewd_lv_view_bind_prop(slider, 0, &ref, 0),
+          "an unknown property type is rejected");
+
+    /* 双向:给了 changed_event 就写回。 */
+    lv_obj_t *slider2 = lv_slider_create(lv_screen_active());
+    int32_t v2 = 0;
+    shrewd_basic_reflect_ref_t ref2;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&ref2, &v2, sizeof(v2)),
+          "ref_init 2");
+    check(SHREWD_LV_VIEW_ERR_OK
+              == shrewd_lv_view_bind_prop(
+                  slider2, LV_PROPERTY_SLIDER_VALUE, &ref2, LV_EVENT_VALUE_CHANGED),
+          "bind_prop (two-way)");
+    lv_slider_set_value(slider2, 55, LV_ANIM_OFF);
+    (void)lv_obj_send_event(slider2, LV_EVENT_VALUE_CHANGED, NULL);
+    check(55 == v2, "the property writes back through the event");
+}
+
 int main(void) {
     lvgl_fixture_init();
     test_one_way();
+    test_bind_prop();
     test_two_way();
     test_applying_guard();
     test_delete_cleanup();

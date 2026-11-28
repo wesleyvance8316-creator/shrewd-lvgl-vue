@@ -401,14 +401,19 @@ int shrewd_lv_view_shell_add_tab(shrewd_lv_view_shell_t *shell, const char *labe
 /**
  * 属性适配器:描述"怎么写进 widget"与"怎么从 widget 读回"。
  * `read` 为 NULL 即单向;非 NULL 即双向,并在 `changed_event` 上写回。
+ *
+ * **`ctx` 是每条绑定自己的配置**(比如 LVGL 的属性号)。静态表填 NULL;
+ * `shrewd_lv_view_bind` 会**按值拷贝**这个结构,所以调用方也可以在栈上拼一个
+ * 填好 `ctx` 的临时 target,不必让它比绑定活得久。
  */
 typedef struct shrewd_lv_view_target {
     /** ref → widget。@p value 指向 ref 的槽位,@p size 是其宽度。 */
-    void (*write)(void *obj, const void *value, size_t size);
+    void (*write)(void *obj, const void *value, size_t size, void *ctx);
     /** widget → ref;返回 shrewd_lv_view_* 错误码。NULL = 单向。 */
-    int (*read)(void *obj, void *out, size_t size);
+    int (*read)(void *obj, void *out, size_t size, void *ctx);
     /** 写回触发的 LVGL 事件码(read 为 NULL 时忽略)。 */
     uint32_t changed_event;
+    void *ctx;
 } shrewd_lv_view_target_t;
 
 /**
@@ -438,6 +443,20 @@ int shrewd_lv_view_bind_textarea_text(lv_obj_t *obj, shrewd_basic_reflect_ref_t 
  * `LV_STATE_CHECKED`。**样式交给主题** —— 框架只表达"谁是当前"。
  */
 int shrewd_lv_view_bind_tab_bar(lv_obj_t *bar, shrewd_basic_reflect_ref_t *ref);
+
+/**
+ * 把**任意 LVGL property** 接上响应式绑定 —— 不用为每个属性写一张 target 表。
+ * 自定义控件的属性(`LV_PROPERTY_ID(...)` 划出来的)也一样能绑。
+ *
+ * **类型校验就在这里**:@p ref 的宽度必须与属性声明的类型一致,不一致直接
+ * `SHREWD_LV_VIEW_ERR_ARG_INVALID`,不会带着错的宽度进 setter。
+ *
+ * @param changed_event 非 0 则双向:在这个事件上把属性读回 ref。0 = 单向。
+ */
+int shrewd_lv_view_bind_prop(lv_obj_t *obj,
+                             uint32_t id,
+                             shrewd_basic_reflect_ref_t *ref,
+                             uint32_t changed_event);
 
 /*
  * ==========================================================================
