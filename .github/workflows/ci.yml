@@ -17,6 +17,12 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      # **必须是绝对路径**:CMake 把相对的 CMAKE_PREFIX_PATH 解析成相对**构建
+      # 目录**,于是 examples/*/build + build/prefix 变成找不到的那个目录。
+      # (框架自己没暴露这个坑,是因为它按 CMAKE_CURRENT_SOURCE_DIR 算了绝对
+      # 路径再 list(PREPEND …)。)
+      PREFIX: ${{ github.workspace }}/build/prefix
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +46,7 @@ jobs:
 
       - name: Configure and build the framework
         run: |
-          cmake -S . -B build -DCMAKE_PREFIX_PATH=build/prefix
+          cmake -S . -B build -DCMAKE_PREFIX_PATH=${{ env.PREFIX }}
           cmake --build build -j
 
       - name: Test the framework
@@ -54,7 +60,7 @@ jobs:
       - name: Build and test the component library
         run: |
           cmake -S examples/component-lib -B examples/component-lib/build \
-                -DCMAKE_PREFIX_PATH=build/prefix
+                -DCMAKE_PREFIX_PATH=${{ env.PREFIX }}
           cmake --build examples/component-lib/build -j
           cmake --install examples/component-lib/build --prefix build/prefix
           ctest --test-dir examples/component-lib/build --output-on-failure
@@ -64,7 +70,7 @@ jobs:
       - name: Build and run the prototype
         run: |
           cmake -S examples/prototype -B examples/prototype/build \
-                -DCMAKE_PREFIX_PATH=build/prefix
+                -DCMAKE_PREFIX_PATH=${{ env.PREFIX }}
           cmake --build examples/prototype/build -j
           ./examples/prototype/build/prototype
 
