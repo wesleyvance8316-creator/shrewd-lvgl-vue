@@ -202,6 +202,23 @@ shrewd_lv_view_bind_list(container, &slot_ref, &desc, NULL);
 
 key 集合只有 0 或 1 个时,它自动退化成**条件渲染**。
 
+### 列表很长?开虚拟化
+
+```c
+static const shrewd_lv_view_list_desc_t desc = {
+    /* …同上… */
+    .item_height = 48,      /* > 0 即虚拟化,行高必须等高 */
+};
+```
+
+1000 项也只物化**可视窗口**那几个 widget,内存 O(可视) 而不是 O(总数)。
+滚动时窗口边缘上 teardown + build。框架把控件摆到 `(容器宽, item_height)`,
+并在容器里放一根撑高度的 spacer —— **容器的 layout 会被设成 NONE**,别在它上面
+再套 flex。
+
+> 一个小坑:`lv_obj_scroll_by(obj, 0, +dy)` 是**把内容往下推**(往回滚),
+> 想往下翻内容要传负值,而且要用 `lv_obj_scroll_by_bounded` 才会被滚动范围夹住。
+
 ---
 
 ## 6. 数据从别的线程来

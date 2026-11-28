@@ -2,8 +2,8 @@
  * @file test_list.c
  * @brief 列表对账的单测(design.md §10)。
  *
- * 验四件事:增删复用(`build` 只跑一次)、顺序变化不重建、条件渲染退化形态、
- * 容器删除级联自清。
+ * 验五件事:增删复用(`build` 只跑一次)、顺序变化不重建、条件渲染退化形态、
+ * 容器删除级联自清、虚拟化只物化可视窗口。
  */
 #include <stdio.h>
 #include <string.h>
@@ -245,6 +245,88 @@ static void test_container_delete(void) {
     set_list(&ref, &slot, three, 3);
 }
 
+/* --- 6. 虚拟化:item_height > 0 → 只物化可视窗口 -------------------- */
+
+static int32_t g_big[200];
+static uint32_t g_big_count;
+static int g_big_builds;
+
+static const void *big_at(void *ctx, uint32_t i) {
+    (void)ctx;
+    return &g_big[i];
+}
+
+static uint32_t big_key(void *ctx, uint32_t i) {
+    (void)ctx;
+    return (uint32_t)g_big[i];
+}
+
+static lv_obj_t *big_build(void *ctx, lv_obj_t *container, const void *item, void *instance) {
+    (void)ctx;
+    (void)item;
+    (void)instance;
+    g_big_builds += 1;
+    return lv_obj_create(container);
+}
+
+static const shrewd_lv_view_list_desc_t big_desc = {
+    .at = big_at,
+    .key = big_key,
+    .item_size = sizeof(int32_t),
+    .instance_size = 0,
+    .item_height = 20,
+    .build = big_build,
+};
+
+static void big_set(uint32_t n) {
+    for (uint32_t i = 0; i < n; ++i) {
+        g_big[i] = (int32_t)(1000 + i); /* key 唯一且稳定 */
+    }
+    g_big_count = n;
+}
+
+static void test_virtualization(void) {
+    printf("test_virtualization\n");
+    lv_obj_t *container = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(container, 200, 100); /* 可视 5 行 */
+
+    shrewd_lv_view_list_t slot;
+    memset(&slot, 0, sizeof(slot));
+    shrewd_basic_reflect_ref_t ref;
+    check(SHREWD_BASIC_ERR_OK == shrewd_basic_reflect_ref_init(&ref, &slot, sizeof(slot)),
+          "ref_init");
+
+    big_set(100);
+    g_big_builds = 0;
+    check(SHREWD_LV_VIEW_ERR_OK == shrewd_lv_view_bind_list(container, &ref, &big_desc, NULL),
+          "bind_list (virtual)");
+
+    slot.items = g_big;
+    slot.count = g_big_count;
+    (void)shrewd_basic_reflect_ref_set(&ref, &slot, sizeof(slot));
+
+    /* 100 项,只该物化窗口那几个(±1 根撑高度的 spacer) */
+    uint32_t kids = lv_obj_get_child_count(container);
+    check(kids < 20, "100 items do NOT make 100 widgets");
+    check(3 < kids, "window is not empty");
+    check((int)kids - 1 == g_big_builds, "one build per materialized row (minus spacer)");
+
+    /* 滚动 → 窗口滑动 → 边缘上补新的;实例数不变 */
+    uint32_t builds_before = (uint32_t)g_big_builds;
+    lv_obj_scroll_by_bounded(container, 0, -200, LV_ANIM_OFF); /* 滚 10 行 */
+    check(builds_before < (uint32_t)g_big_builds, "scrolling materializes new rows");
+    /* 窗口大小不保证恒定(顶/底边缘处本来就短),但必须始终有界 */
+    uint32_t scrolled = lv_obj_get_child_count(container);
+    check(scrolled < 20, "window stays bounded while scrolling");
+
+    /* 结构变化:砍掉一半 → 窗口重算,不得留悬垂 */
+    big_set(50);
+    slot.items = g_big;
+    slot.count = g_big_count;
+    (void)shrewd_basic_reflect_ref_set(&ref, &slot, sizeof(slot));
+    check(lv_obj_get_child_count(container) <= scrolled, "window still bounded after a shrink");
+}
+
 int main(void) {
     lvgl_fixture_init();
     test_add_remove_reuse();
@@ -252,6 +334,7 @@ int main(void) {
     test_conditional();
     test_instance_owned();
     test_container_delete();
+    test_virtualization();
     if (0 == g_fail) {
         printf("test_list: ok\n");
         return 0;

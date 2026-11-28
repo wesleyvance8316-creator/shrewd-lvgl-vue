@@ -147,6 +147,7 @@ typedef struct shrewd_lv_view_list_desc {
     uint32_t (*key)(void *ctx, uint32_t i);     /* 稳定标识,必需 */
     size_t item_size;
     size_t instance_size;                       /* 0 = 无实例;框架分配、销毁时释放 */
+    int32_t item_height;                        /* > 0 = 开启虚拟化(必须等高) */
     lv_obj_t *(*build)(void *ctx, lv_obj_t *container, const void *item, void *instance);
     void (*teardown)(void *ctx, void *instance);
 } shrewd_lv_view_list_desc_t;
@@ -158,6 +159,10 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
 
 对账规则:**按 key 增删复用**;顺序变化只挪不重建;key 集合 0 或 1 时退化成
 条件渲染。容器里**只放列表子项**。
+
+**虚拟化**:`item_height > 0` 时只物化**可视窗口**那几项,内存 O(可视) 而不是
+O(总数)。滚动时窗口边缘上 teardown + build;框架把控件摆到 `(容器宽, item_height)`
+并在容器里放一根撑高度的 spacer。**行高必须等高**。
 
 ---
 

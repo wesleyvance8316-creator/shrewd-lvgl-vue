@@ -484,6 +484,16 @@ typedef struct shrewd_lv_view_list_desc {
     size_t instance_size;
 
     /**
+     * 行高。**> 0 即开启虚拟化**(必须等高):只有可视窗口里的子项被物化,
+     * 内存 O(可视) 而不是 O(总数);滚动时在窗口边缘上 teardown + build。
+     *
+     * 0 = 不虚拟化(默认),全量建 —— 小列表用这个。
+     * 开启后框架把控件摆到 (容器宽, item_height),并在容器里放一根**撑高度的
+     * spacer**;容器的 layout 会被设成 NONE。
+     */
+    int32_t item_height;
+
+    /**
      * 建子项,返回它的 root widget。**只跑一次**。
      * @p instance 是框架分配的实例(instance_size 为 0 时是 NULL)。
      */

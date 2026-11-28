@@ -33,6 +33,8 @@ typedef struct {
     shrewd_lv_view_list_slot_t *slots;
     size_t count;
     size_t capacity;
+    lv_obj_t *spacer; /**< 虚拟化:撑出滚动范围,不是子项 */
+    int applying;     /**< 重入护栏:物化会动容器,可能带回 scroll 事件 */
 } shrewd_lv_view_list_binding_t;
 
 /* --- 槽位表 ---------------------------------------------------------- */
@@ -119,11 +121,77 @@ static const void *list_item_at(shrewd_lv_view_list_binding_t *b,
     return (const char *)list->items + ((size_t)i * b->desc->item_size);
 }
 
+/* --- 虚拟化:只物化可视窗口(item_height > 0)---------------------- */
+
+/**
+ * 该物化的 `[first, last]`。
+ *
+ * 不虚拟化时就是全量;虚拟化时按滚动位置取窗口,上下各多探一行 —— 滚动时
+ * 边缘上是 teardown + build,多探一行能少抖。
+ */
+static void list_window(shrewd_lv_view_list_binding_t *b,
+                        const shrewd_lv_view_list_t *list,
+                        uint32_t *first,
+                        uint32_t *last) {
+    uint32_t count = list->count;
+    *first = 0;
+    *last = (0 == count) ? 0 : (count - 1);
+    if ((0 >= b->desc->item_height) || (0 == count)) {
+        return;
+    }
+    /* 坐标是 layout 算出来的,先让它落地(无头环境尤其重要)。 */
+    lv_obj_update_layout(b->container);
+    int32_t ih = b->desc->item_height;
+    /* 用 scroll_top(顶部被隐藏的高度)而不是 get_scroll_y —— 后者向下滚是负的。 */
+    int32_t top = lv_obj_get_scroll_top(b->container);
+    if (0 > top) {
+        top = 0;
+    }
+    int32_t view = lv_obj_get_content_height(b->container);
+    if (0 >= view) {
+        view = lv_obj_get_height(b->container);
+    }
+    uint32_t f = (uint32_t)(top / ih);
+    uint32_t l = (uint32_t)((top + view) / ih);
+    if (0 < f) {
+        f -= 1;
+    }
+    if (l + 1 < count) {
+        l += 1;
+    }
+    if (l >= count) {
+        l = count - 1;
+    }
+    if (f > l) {
+        f = l;
+    }
+    *first = f;
+    *last = l;
+}
+
 /* --- 对账:最小的那一种(design.md §10.4)-------------------------- */
 
-static void list_reconcile(shrewd_lv_view_list_binding_t *b, const shrewd_lv_view_list_t *list) {
-    /* 1. 命中 → 复用,不重建;未命中 → build。 */
-    for (uint32_t i = 0; i < list->count; ++i) {
+/** key 是否落在 `[first, last]` 对应的那些项里。 */
+static int list_key_in_window(shrewd_lv_view_list_binding_t *b,
+                              const shrewd_lv_view_list_t *list,
+                              uint32_t key,
+                              uint32_t first,
+                              uint32_t last) {
+    for (uint32_t i = first; (i <= last) && (i < list->count); ++i) {
+        if (b->desc->key(b->ctx, i) == key) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void list_reconcile(shrewd_lv_view_list_binding_t *b,
+                           const shrewd_lv_view_list_t *list,
+                           uint32_t first,
+                           uint32_t last) {
+    /* 1. 命中 → 复用,不重建;未命中 → build。
+       `i < list->count` 是空列表的护栏:count 为 0 时 last 会落到 0。 */
+    for (uint32_t i = first; (i <= last) && (i < list->count); ++i) {
         uint32_t key = b->desc->key(b->ctx, i);
         if (NULL != list_find(b, key)) {
             continue; /* 复用:内容变化由 item 里的 ref 自动传播 */
@@ -162,20 +230,13 @@ static void list_reconcile(shrewd_lv_view_list_binding_t *b, const shrewd_lv_vie
         (void)lv_obj_add_event_cb(child, list_child_delete, LV_EVENT_DELETE, b);
     }
 
-    /* 2. 数据里没有的 key → teardown + 删。 */
+    /* 2. 窗口里没有的 key → teardown + 删(不虚拟化时即"数据里没有")。 */
     for (size_t i = 0; i < b->count; ++i) {
         lv_obj_t *child = b->slots[i].child;
         if (NULL == child) {
             continue;
         }
-        int keep = 0;
-        for (uint32_t j = 0; j < list->count; ++j) {
-            if (b->desc->key(b->ctx, j) == b->slots[i].key) {
-                keep = 1;
-                break;
-            }
-        }
-        if (0 != keep) {
+        if (0 != list_key_in_window(b, list, b->slots[i].key, first, last)) {
             continue;
         }
         if (NULL != b->desc->teardown) {
@@ -185,10 +246,18 @@ static void list_reconcile(shrewd_lv_view_list_binding_t *b, const shrewd_lv_vie
         slot_release(&b->slots[i], b->desc);
     }
 
-    /* 3. 顺序:挪到目标位置,不重建(design.md §10.4)。 */
-    for (uint32_t i = 0; i < list->count; ++i) {
+    /* 3. 定位。不虚拟化:挪到目标索引,不重建(design.md §10.4);
+     *    虚拟化:按行高摆到绝对位置 —— 顺序由坐标表达,不靠 child 顺序。 */
+    for (uint32_t i = first; (i <= last) && (i < list->count); ++i) {
         shrewd_lv_view_list_slot_t *slot = list_find(b, b->desc->key(b->ctx, i));
-        if ((NULL != slot) && (NULL != slot->child)) {
+        if ((NULL == slot) || (NULL == slot->child)) {
+            continue;
+        }
+        if (0 < b->desc->item_height) {
+            lv_obj_set_pos(slot->child, 0, (int32_t)i * b->desc->item_height);
+            lv_obj_set_size(
+                slot->child, lv_obj_get_content_width(b->container), b->desc->item_height);
+        } else {
             lv_obj_move_to_index(slot->child, (int32_t)i);
         }
     }
@@ -196,9 +265,26 @@ static void list_reconcile(shrewd_lv_view_list_binding_t *b, const shrewd_lv_vie
 
 static void list_apply(void *ctx) {
     shrewd_lv_view_list_binding_t *b = (shrewd_lv_view_list_binding_t *)ctx;
+    if (0 != b->applying) {
+        return; /* 物化会动容器,可能带回 scroll 事件 —— 别绕回来 */
+    }
+    b->applying = 1;
     const shrewd_lv_view_list_t *list
         = (const shrewd_lv_view_list_t *)shrewd_basic_reflect_ref_get(b->source);
-    list_reconcile(b, list);
+    if (NULL != b->spacer) {
+        lv_obj_set_size(b->spacer, 1, (int32_t)list->count * b->desc->item_height);
+    }
+    uint32_t first = 0;
+    uint32_t last = 0;
+    list_window(b, list, &first, &last);
+    list_reconcile(b, list, first, last);
+    b->applying = 0;
+}
+
+/** 滚动 → 窗口滑动 → 重新物化。虚拟化模式下才挂。 */
+static void list_scroll(lv_event_t *e) {
+    shrewd_lv_view_list_binding_t *b = (shrewd_lv_view_list_binding_t *)lv_event_get_user_data(e);
+    list_apply(b);
 }
 
 int shrewd_lv_view_bind_list(lv_obj_t *container,
@@ -222,6 +308,24 @@ int shrewd_lv_view_bind_list(lv_obj_t *container,
     b->desc = desc;
     b->ctx = ctx;
     b->container = container;
+    /* 虚拟化:item_height > 0。容器改成无布局 + 一根撑高度的 spacer,
+       滚动事件驱动窗口滑动。 */
+    if (0 < desc->item_height) {
+        lv_obj_set_style_layout(container, LV_LAYOUT_NONE, 0);
+        b->spacer = lv_obj_create(container);
+        if (NULL == b->spacer) {
+            void *self = b;
+            (void)shrewd_basic_platform_free(&self);
+            return SHREWD_LV_VIEW_ERR_MEM_NOMEM;
+        }
+        lv_obj_set_pos(b->spacer, 0, 0);
+        lv_obj_set_size(b->spacer, 1, 0);
+        lv_obj_set_style_bg_opa(b->spacer, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(b->spacer, 0, 0);
+        lv_obj_set_style_pad_all(b->spacer, 0, 0);
+        (void)lv_obj_add_event_cb(container, list_scroll, LV_EVENT_SCROLL, b);
+    }
+
     /* 先挂清理再建 effect:effect_init 立刻跑一次,中途失败仍可自清。 */
     if (NULL == lv_obj_add_event_cb(container, list_binding_delete, LV_EVENT_DELETE, b)) {
         slot = b;
